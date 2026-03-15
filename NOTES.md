@@ -2,9 +2,10 @@
 
 ## Barcode Scannability Fix
 
-**Problem:** Got a parking ticket. Mall cop scanner failed to read the barcode on the e-ink display.
-The barcode value and Code 39 patterns are correct (`6103268` = permit number minus the "T" prefix,
-which is what the original permit barcode encodes). The issue is rendering quality.
+**Problem:** Got a parking ticket from a parking enforcement officer — their handheld scanner failed
+to read the barcode on the e-ink display. Phone barcode apps scan it fine, but dedicated handheld
+scanners are stricter. The barcode value and Code 39 patterns are correct (`6103268` = permit number
+minus the "T" prefix, which is what the original permit barcode encodes). The issue is rendering quality.
 
 **Root causes:**
 1. `NARROW_BAR_WIDTH = 1` in `permit_config.h` — bars are only 1px wide. Too thin for strict scanners.

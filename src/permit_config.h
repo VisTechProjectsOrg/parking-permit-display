@@ -14,29 +14,25 @@ const char *VALID_TO = "Sep 12, 2025: 01:08";
 const char *BARCODE_VALUE = "6103268";
 const char *BARCODE_LABEL = "00435";
 
-// ========== TEXT POSITIONING ==========
-const int PERMIT_X = 150;
-const int PERMIT_Y = 12;
-const int PLATE_Y_OFFSET = 17;        // Offset from PERMIT_Y
-const int VALID_FROM_Y_OFFSET = 28;   // Offset from PLATE_Y
-const int VALID_TO_Y_OFFSET = 17;     // Offset from VALID_FROM_Y
+// ========== LAYOUT: RIGHT COLUMN (beside logo, x >= 146) ==========
+const int RIGHT_COL_X  = 146;
+const int TITLE_Y1     = 14;   // "Temporary parking"
+const int TITLE_Y2     = 27;   // "permit"
+const int PERMIT_Y     = 42;   // Permit #
+const int PLATE_Y      = 57;   // Plate #
 
-// ========== BARCODE SETTINGS ==========
-const int BARCODE_X = 0;
-const int BARCODE_Y = 0;
-const int BARCODE_HEIGHT = 52;
-const int NARROW_BAR_WIDTH = 1;
-const int BARCODE_LABEL_Y_OFFSET = 22;  // Offset below barcode
+// ========== LAYOUT: LEFT COLUMN (below logo) ==========
+const int DATE_FROM_Y  = 63;   // Valid from
+const int DATE_TO_Y    = 75;   // Valid to
 
-// ========== LOGO SETTINGS ==========
-const int LOGO_Y_OFFSET = 27;  // Offset below barcode label
+// ========== SEPARATOR ==========
+const int SEPARATOR_Y  = 78;
 
-// ========== TEMPORARY PARKING TEXT SETTINGS ==========
-const int TEMP_PARKING_X_OFFSET = 10;   // Offset from logo right edge
-const int TEMP_PARKING_Y1_OFFSET = 28;  // First line Y offset from logo top
-const int TEMP_PARKING_Y2_OFFSET = 16;  // Second line offset from first line
-
-// ========== SEPARATOR LINE SETTINGS ==========
-const int HORIZONTAL_LINE_Y_OFFSET = 8;  // Offset below plate text
+// ========== BARCODE (full width, bottom) ==========
+const int BARCODE_X             = 5;
+const int BARCODE_Y             = 80;
+const int BARCODE_HEIGHT        = 32;
+const int NARROW_BAR_WIDTH      = 2;
+const int BARCODE_LABEL_Y_OFFSET = 3;  // offset below barcode bottom
 
 #endif

@@ -4,7 +4,6 @@
 #include <Preferences.h>
 
 #include "Fonts/FreeSansBold8pt7b.h"
-#include "Fonts/FreeSansBold13pt7b.h"
 
 #include "Code39Generator.h"
 #include "imgs/toronto_logo.h"
@@ -31,62 +30,55 @@ void displayPermit(const char *permitNumber, const char *plateNumber,
   display->setFont((GFXfont *)&FreeSansBold8pt7b);
   display->setTextSize(1);
 
-  const int PLATE_X = PERMIT_X;
-  const int PLATE_Y = PERMIT_Y + PLATE_Y_OFFSET;
-  const int VALID_FROM_X = PERMIT_X;
-  const int VALID_FROM_Y = PLATE_Y + VALID_FROM_Y_OFFSET;
-  const int VALID_TO_X = PERMIT_X;
-  const int VALID_TO_Y = VALID_FROM_Y + VALID_TO_Y_OFFSET;
+  // ========== LOGO (top-left, white on black) ==========
+  display->fillRect(0, 0, LOGO_WIDTH, LOGO_HEIGHT, 0x0000);
+  display->drawBitmap(0, 0, logo_toronto, LOGO_WIDTH, LOGO_HEIGHT, 0xFFFF);
 
+  // ========== TITLE (right of logo) ==========
+  display->setCursor(RIGHT_COL_X, TITLE_Y1);
+  display->print("Temporary parking");
+  display->setCursor(RIGHT_COL_X, TITLE_Y2);
+  display->print("permit");
+
+  // ========== PERMIT INFO (right column) ==========
   char permit_no[40];
   char plate_no[40];
-  sprintf(permit_no, "Permit #: %s", permitNumber);
-  sprintf(plate_no, "Plate #: %s", plateNumber);
+  sprintf(permit_no, "Permit: %s", permitNumber);
+  sprintf(plate_no, "Plate:  %s", plateNumber);
 
-  display->setCursor(PERMIT_X, PERMIT_Y);
+  display->setCursor(RIGHT_COL_X, PERMIT_Y);
   display->print(permit_no);
-
-  display->setCursor(PLATE_X, PLATE_Y);
+  display->setCursor(RIGHT_COL_X, PLATE_Y);
   display->print(plate_no);
 
-  int lineY = PLATE_Y + HORIZONTAL_LINE_Y_OFFSET;
-  display->drawLine(PERMIT_X, lineY, SCREEN_W - 5, lineY, 0x0000);
+  // ========== DATES (left column, below logo) ==========
+  // Show date portion only (first 12 chars = "Sep 05, 2025"), drop the time
+  char fromStr[30], toStr[30];
+  snprintf(fromStr, sizeof(fromStr), "From: %.12s", validFrom);
+  snprintf(toStr,   sizeof(toStr),   "To:   %.12s", validTo);
 
-  display->setCursor(VALID_FROM_X, VALID_FROM_Y);
-  display->print(validFrom);
+  display->setCursor(0, DATE_FROM_Y);
+  display->print(fromStr);
+  display->setCursor(0, DATE_TO_Y);
+  display->print(toStr);
 
-  display->setCursor(VALID_TO_X, VALID_TO_Y);
-  display->print(validTo);
+  // ========== SEPARATOR ==========
+  display->drawLine(0, SEPARATOR_Y, SCREEN_W - 1, SEPARATOR_Y, 0x0000);
 
+  // ========== BARCODE (full width, bottom) ==========
   Code39Generator barcodeGen(display);
   barcodeGen.drawBarcode(barcodeValue, BARCODE_X, BARCODE_Y, BARCODE_HEIGHT, NARROW_BAR_WIDTH);
 
+  // ========== BARCODE LABEL (centered below barcode) ==========
   int barcodePixelWidth = barcodeGen.getBarcodeWidth(barcodeValue, NARROW_BAR_WIDTH);
-  int16_t x3, y3;
+  int16_t x1, y1;
   uint16_t w, h;
-  display->setFont(&FreeSansBold13pt7b);
-  display->getTextBounds(barcodeLabel, 0, 0, &x3, &y3, &w, &h);
+  display->getTextBounds(barcodeLabel, 0, 0, &x1, &y1, &w, &h);
   int labelX = BARCODE_X + (barcodePixelWidth / 2) - (w / 2);
   display->setCursor(labelX, BARCODE_Y + BARCODE_HEIGHT + BARCODE_LABEL_Y_OFFSET);
   display->print(barcodeLabel);
 
-  int logoX = BARCODE_X + (barcodePixelWidth / 2) - (LOGO_WIDTH / 2);
-  int logoY = BARCODE_Y + BARCODE_HEIGHT + LOGO_Y_OFFSET;
-
-  display->fillRect(logoX, logoY, LOGO_WIDTH, LOGO_HEIGHT, 0x0000);
-  display->drawBitmap(logoX, logoY, logo_toronto, LOGO_WIDTH, LOGO_HEIGHT, 0xFFFF);
-
-  const char *permitText1 = "Temporary parking";
-  const char *permitText2 = "permit";
-  int permitTextX = logoX + LOGO_WIDTH + TEMP_PARKING_X_OFFSET;
-  int permitTextY1 = logoY + TEMP_PARKING_Y1_OFFSET;
-  int permitTextY2 = permitTextY1 + TEMP_PARKING_Y2_OFFSET;
-  display->setFont(&FreeSansBold8pt7b);
-  display->setTextSize(1);
-  display->setCursor(permitTextX, permitTextY1);
-  display->print(permitText1);
-  display->setCursor(permitTextX, permitTextY2);
-  display->print(permitText2);
+  // Push to e-ink
 
   display->update();
 }
