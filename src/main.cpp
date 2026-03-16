@@ -44,23 +44,35 @@ void displayPermit(const char *permitNumber, const char *plateNumber,
   char permit_no[40];
   char plate_no[40];
   sprintf(permit_no, "Permit: %s", permitNumber);
-  sprintf(plate_no, "Plate:  %s", plateNumber);
+  sprintf(plate_no, "Plate: %s", plateNumber);
 
   display->setCursor(RIGHT_COL_X, PERMIT_Y);
   display->print(permit_no);
   display->setCursor(RIGHT_COL_X, PLATE_Y);
   display->print(plate_no);
 
+  // ========== BARCODE LABEL (below plate) ==========
+  char areaStr[40];
+  sprintf(areaStr, "Area: %s", barcodeLabel);
+  display->setCursor(RIGHT_COL_X, DATE_TO_Y);
+  display->print(areaStr);
+
   // ========== DATES (left column, below logo) ==========
   // Show date portion only (first 12 chars = "Sep 05, 2025"), drop the time
-  char fromStr[30], toStr[30];
-  snprintf(fromStr, sizeof(fromStr), "From: %.12s", validFrom);
-  snprintf(toStr,   sizeof(toStr),   "To:   %.12s", validTo);
+  char dateVal[16];
+  const int DATE_VAL_X = 47;  // Aligned x position for date values
 
   display->setCursor(0, DATE_FROM_Y);
-  display->print(fromStr);
+  display->print("From:");
+  snprintf(dateVal, sizeof(dateVal), "%.12s", validFrom);
+  display->setCursor(DATE_VAL_X, DATE_FROM_Y);
+  display->print(dateVal);
+
   display->setCursor(0, DATE_TO_Y);
-  display->print(toStr);
+  display->print("To:");
+  snprintf(dateVal, sizeof(dateVal), "%.12s", validTo);
+  display->setCursor(DATE_VAL_X, DATE_TO_Y);
+  display->print(dateVal);
 
   // ========== SEPARATOR ==========
   display->drawLine(0, SEPARATOR_Y, SCREEN_W - 1, SEPARATOR_Y, 0x0000);
@@ -68,15 +80,6 @@ void displayPermit(const char *permitNumber, const char *plateNumber,
   // ========== BARCODE (full width, bottom) ==========
   Code39Generator barcodeGen(display);
   barcodeGen.drawBarcode(barcodeValue, BARCODE_X, BARCODE_Y, BARCODE_HEIGHT, NARROW_BAR_WIDTH);
-
-  // ========== BARCODE LABEL (centered below barcode) ==========
-  int barcodePixelWidth = barcodeGen.getBarcodeWidth(barcodeValue, NARROW_BAR_WIDTH);
-  int16_t x1, y1;
-  uint16_t w, h;
-  display->getTextBounds(barcodeLabel, 0, 0, &x1, &y1, &w, &h);
-  int labelX = BARCODE_X + (barcodePixelWidth / 2) - (w / 2);
-  display->setCursor(labelX, BARCODE_Y + BARCODE_HEIGHT + BARCODE_LABEL_Y_OFFSET);
-  display->print(barcodeLabel);
 
   // Push to e-ink
 

@@ -18,11 +18,12 @@ const char *BARCODE_LABEL = "00435";
 const int RIGHT_COL_X  = 146;
 const int TITLE_Y1     = 14;   // "Temporary parking"
 const int TITLE_Y2     = 27;   // "permit"
-const int PERMIT_Y     = 42;   // Permit #
-const int PLATE_Y      = 57;   // Plate #
+const int PERMIT_Y     = 49;   // Permit #
+const int PLATE_Y      = 62;   // Plate # (inline with DATE_FROM_Y)
+
 
 // ========== LAYOUT: LEFT COLUMN (below logo) ==========
-const int DATE_FROM_Y  = 63;   // Valid from
+const int DATE_FROM_Y  = 62;   // Valid from
 const int DATE_TO_Y    = 75;   // Valid to
 
 // ========== SEPARATOR ==========
@@ -31,8 +32,8 @@ const int SEPARATOR_Y  = 78;
 // ========== BARCODE (full width, bottom) ==========
 const int BARCODE_X             = 5;
 const int BARCODE_Y             = 80;
-const int BARCODE_HEIGHT        = 32;
+const int BARCODE_HEIGHT        = 45;
 const int NARROW_BAR_WIDTH      = 2;
-const int BARCODE_LABEL_Y_OFFSET = 3;  // offset below barcode bottom
+const int BARCODE_LABEL_Y_OFFSET = 12;  // offset below barcode bottom
 
 #endif
