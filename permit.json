@@ -1,10 +1,10 @@
 {
-  "permitNumber": "T6251152",
+  "permitNumber": "T6257132",
   "plateNumber": "DBXH751",
   "vehicleName": "Hooptie",
-  "validFrom": "Mar 20, 2026: 00:00",
-  "validTo": "Mar 27, 2026: 23:59",
-  "barcodeValue": "6251152",
+  "validFrom": "Mar 28, 2026: 00:00",
+  "validTo": "Apr 04, 2026: 23:59",
+  "barcodeValue": "6257132",
   "barcodeLabel": "00435",
   "amountPaid": "$50.78"
 }
