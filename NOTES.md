@@ -159,9 +159,13 @@ slice: LoRa sleep + `VExtOff` + LED off + `esp_deep_sleep`, wake on button (GPIO
   Wakes spike to tens of mA (switch to mA range or the µA fuse may trip).
 - Read it: ~20-40µA => months confirmed, build the full firmware. ~1mA+ => LoRa didn't sleep, debug.
 
+**Result (measured 2026-06-25):** active ~40mA (CPU) with ~70mA peaks (e-ink refresh), **deep
+sleep = 0.02mA (~20µA)** -- best-case floor, LoRa confirmed asleep. Validates ~13-14 months
+theoretical on 200mAh (~6-10 realistic after derating + self-discharge). Premise proven on hardware.
+
 ## TODO (battery firmware)
 - [x] Minimal sleep-test sketch (`sleep_test.cpp`) -- LoRa sleep + Vext/LED off + deep sleep.
-- [ ] Flash `sleep_test` + measure deep-sleep current on the battery line (confirm ~20-40µA).
+- [x] Flash `sleep_test` + measure deep-sleep current -- **measured ~20µA (0.02mA) on 2026-06-25.** PASS.
 - [ ] Find `VBAT_Read` + `ADC_Ctrl` GPIOs from Heltec's VisionMaster board file/docs.
 - [ ] Battery read: assert ADC_Ctrl -> analogRead -> / 0.204 -> de-assert (divider 390k/100k).
 - [ ] Power-source detect (charge-IC CHRG/DONE or VBAT_Read): USB -> stay awake + charge; battery -> deep sleep.
