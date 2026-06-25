@@ -79,7 +79,8 @@ deep-sleep current low. After checking the schematic + datasheets the realistic 
 ## Wake strategy
 - Deep sleep by default.
 - **Button (GPIO21)** -> ext0/GPIO wake -> BLE sync with phone -> sleep.
-- **RTC timer wake at midnight** on expiry day -> redraw the cached next permit -> sleep (no radio).
+- **RTC timer wake at the handoff** -- the next permit's `validFrom` (its actual start; in practice
+  local midnight / 00:00) -> redraw the cached next permit -> sleep (no radio).
 - **Last 1-2 days:** short periodic advertise windows so the phone can push the freshly-bought
   permit without a button press; cache it.
 - BLE caveat: while asleep it isn't advertising, so the phone can only sync during a wake window
@@ -204,7 +205,8 @@ on each sync** -> sets the ESP32 RTC. The display uses it to know "midnight" (fl
 
 ## Display behaviour on battery
 - Holds **two permits** (current + next) and runs the on-device version of the server-side flip:
-  show current until its `validTo`, **flip to the cached next permit at local midnight**.
+  show current until its `validTo`, then **flip to the cached next permit at its `validFrom`** --
+  the actual handoff time, which in practice is local midnight (00:00) but use the real timestamp.
 - **Sleep flat at ~20µA** for the quiet ~5 days.
 - **Last ~2 days:** duty-cycled advertise (e.g. ~3s every 15 min) **only during daytime hours**
   (~8am-8pm) so the phone can push the new permit when you next drive. This is the main battery
