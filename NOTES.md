@@ -178,3 +178,61 @@ theoretical on 200mAh (~6-10 realistic after derating + self-discharge). Premise
 - [ ] Verify charge current (PROG resistor) is safe for a 200mAh cell; use a protected cell.
 - [ ] Confirm graceful failure: if the battery dies, the e-ink just holds the last image.
 - [ ] Integrate into `main.cpp` behind power-source detect; retire the buyer's server-side 4 PM flip.
+
+---
+
+# Set-and-forget sync design (no cables, charge ~every 6 months)
+
+Use model: never plug in to sync; charge maybe twice a year. So the weekly permit handoff must
+happen over BLE **while on battery**, and the e-ink is **enforcement-facing** (a stale/expired
+barcode = a real ticket -- that's how the last ticket happened), so caching the next permit before
+the midnight flip has to be reliable.
+
+## Advance purchase (buyer side) -- CONFIRMED the site allows it
+The Toronto site accepts a **future start date** (verified 2026-06-25: bought a permit Valid From
+Jul 02 while today was Jun 25). So:
+- Buyer buys the next permit **~2-3 days early** (configurable lead time), with **start date =
+  current permit's expiry + 1 day** (today it's hardcoded to "tomorrow" -- needs changing).
+- This widens the window for the display to catch the BLE sync before the handoff.
+- Tradeoffs of going too early: money tied up sooner, price-change exposure, wasted permit if the
+  vehicle is switched during the window. So "a few days," not a week.
+
+## Time source -- app sets the clock (required)
+The display has no clock that survives a dead battery. **The app sends current LOCAL time over BLE
+on each sync** -> sets the ESP32 RTC. The display uses it to know "midnight" (flip) and "daytime"
+(advertise windows) and to compute sleep duration. Local time from the app => DST handled for free.
+
+## Display behaviour on battery
+- Holds **two permits** (current + next) and runs the on-device version of the server-side flip:
+  show current until its `validTo`, **flip to the cached next permit at local midnight**.
+- **Sleep flat at ~20µA** for the quiet ~5 days.
+- **Last ~2 days:** duty-cycled advertise (e.g. ~3s every 15 min) **only during daytime hours**
+  (~8am-8pm) so the phone can push the new permit when you next drive. This is the main battery
+  lever -- measure + tune the cadence like we did the sleep floor.
+- **Button = manual force-sync**, near-zero standby cost -- the reliable backstop that lets the
+  auto-advertise cadence stay conservative.
+
+## App + site tracking (display has no internet -- all telemetry via the app)
+- App pushes the permit, then **reads back the display's stored permit # over BLE to confirm sync**;
+  records permit# + timestamp + battery level.
+- App **reports up to the site** (app has internet; the display never does). Site shows last-synced
+  time / permit on display / battery % -- as fresh as the last app<->display contact.
+- App **notifies** if the display is behind (mismatch / no contact in N days) **or battery is low**.
+
+## Low battery
+- E-ink shows a low-battery icon; app push notification; site flags it. Warn around ~3.4V, hard
+  stop ~3.0V (no hardware BMS -- use a protected cell too).
+
+## Edge cases to handle
+- **Lost clock after dead/recharged battery:** time unknown -> advertise aggressively + show
+  "needs sync" + rely on button, until the app supplies time + permit.
+- **First run / nothing cached:** same fallback (advertise, get time + permit from app).
+- **Vehicle switch during the advance window:** pre-bought permit is wasted (known tradeoff).
+
+## Open / decided
+- [x] Site allows future start date (verified) -> advance purchase is viable.
+- [x] Lead time = **2-3 days** (configurable).
+- [x] Low-battery = e-ink icon + app notif + site flag.
+- [ ] Pick advertise cadence (measure energy cost, last ~2 days, daytime only).
+- [ ] Define the BLE characteristics: push permit(s), push time, read-back permit#, read battery.
+- [ ] Buyer change: start date = current expiry + 1, configurable lead time.
