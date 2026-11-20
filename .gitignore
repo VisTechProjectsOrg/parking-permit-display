@@ -4,6 +4,7 @@
 .vscode/launch.json
 .vscode/ipch
 /.claude/
+CLAUDE.md
 
 # WiFi credentials (use wifi_config.h.example as template)
 src/wifi_config.h

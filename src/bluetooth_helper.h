@@ -1,396 +1,152 @@
 #ifndef BLUETOOTH_HELPER_H
 #define BLUETOOTH_HELPER_H
 
+// The display is a BLE client: the phone (ParkingPermitSync) runs a GATT server and
+// advertises all the time, so a short scan on each wake finds it when it's in range.
+
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEScan.h>
 #include <BLEClient.h>
-#include <BLEServer.h>
-#include <BLE2902.h>
 #include <ArduinoJson.h>
+#include "permit_store.h"
 
-// UUIDs for ESP32 as client (connecting to phone to get permit)
-#define BLE_SERVICE_UUID "0000ff00-0000-1000-8000-00805f9b34fb"
-#define BLE_PERMIT_CHAR_UUID "0000ff01-0000-1000-8000-00805f9b34fb"
-#define BLE_SYNC_TYPE_CHAR_UUID "0000ff02-0000-1000-8000-00805f9b34fb"
+#define BLE_SERVICE_UUID        "0000ff00-0000-1000-8000-00805f9b34fb"
+#define BLE_PERMIT_CHAR_UUID    "0000ff01-0000-1000-8000-00805f9b34fb"  // read: permit JSON
+#define BLE_SYNC_TYPE_CHAR_UUID "0000ff02-0000-1000-8000-00805f9b34fb"  // write: why we're syncing
+#define BLE_STATUS_CHAR_UUID    "0000ff03-0000-1000-8000-00805f9b34fb"  // write: what we show + battery
 
-// Sync types - written to phone before reading permit
-#define SYNC_TYPE_AUTO 1    // Reboot/auto sync - no notification if same permit
-#define SYNC_TYPE_MANUAL 2  // Button press - always show notification
-#define SYNC_TYPE_FORCE 3   // Long press - always show notification
+// Sync types - the phone notifies on manual/force syncs, and on auto syncs only for a new permit
+#define SYNC_TYPE_AUTO   1  // timer wake or power-on
+#define SYNC_TYPE_MANUAL 2  // button press
+#define SYNC_TYPE_FORCE  3  // long press
 
-// UUIDs for ESP32 as server (receiving commands from phone)
-#define BLE_DISPLAY_SERVICE_UUID "0000ff10-0000-1000-8000-00805f9b34fb"
-#define BLE_COMMAND_CHAR_UUID "0000ff11-0000-1000-8000-00805f9b34fb"
+#define FW_VERSION 2
 
-// Commands from phone
-#define CMD_SYNC "SYNC"
-#define CMD_FORCE "FORCE"
+enum SyncResult { SYNC_NOT_FOUND, SYNC_FAILED, SYNC_OK };
 
-// Scan settings
-#define BLE_SCAN_TIME 10       // seconds to scan for phone
-#define BLE_CONNECT_TIMEOUT 10 // seconds to wait for connection
-#define BLE_MAX_RETRIES 2      // number of connection retries
-
-// Command received flag (checked in main loop)
-static volatile int pendingCommand = 0;  // 0=none, 1=sync, 2=force
-
-// Permit data structure
-struct PermitData {
-  char permitNumber[20];
-  char plateNumber[20];
-  char validFrom[30];
-  char validTo[30];
-  char barcodeValue[20];
-  char barcodeLabel[20];
-  bool displayFlipped;
-};
-
-static BLEClient *bleClient = nullptr;
 static BLEAdvertisedDevice *targetDevice = nullptr;
-static bool deviceFound = false;
 
 class PermitScanCallback : public BLEAdvertisedDeviceCallbacks
 {
     void onResult(BLEAdvertisedDevice advertisedDevice)
     {
-        // Debug: print all devices found
-        Serial.print("  Found: ");
-        if (advertisedDevice.haveName()) {
-            Serial.print(advertisedDevice.getName().c_str());
-        } else {
-            Serial.print(advertisedDevice.getAddress().toString().c_str());
-        }
-        if (advertisedDevice.haveServiceUUID()) {
-            Serial.print(" UUID: ");
-            Serial.print(advertisedDevice.getServiceUUID().toString().c_str());
-        }
-        Serial.println();
-
         if (advertisedDevice.haveServiceUUID() &&
             advertisedDevice.isAdvertisingService(BLEUUID(BLE_SERVICE_UUID)))
         {
-            Serial.println("Found Parking Permit Sync phone!");
-
-            // Store device and stop scan
+            Serial.println("Found phone");
             targetDevice = new BLEAdvertisedDevice(advertisedDevice);
-            deviceFound = true;
             BLEDevice::getScan()->stop();
         }
     }
 };
 
-// Scan for the Android phone
-bool scanForPhone()
+static void copyField(char *dst, size_t size, JsonVariantConst v)
 {
-    Serial.println("\n=== Bluetooth Scan ===");
-    Serial.println("Looking for Parking Permit Sync app...");
+    strlcpy(dst, v | "", size);
+}
 
-    deviceFound = false;
-    if (targetDevice)
-    {
+// Fill a permit from a JSON object; false if any field the display draws is missing
+static bool parsePermit(JsonVariantConst o, PermitData &p)
+{
+    memset(&p, 0, sizeof(p));
+    copyField(p.permitNumber, sizeof(p.permitNumber), o["permitNumber"]);
+    copyField(p.plateNumber, sizeof(p.plateNumber), o["plateNumber"]);
+    copyField(p.validFrom, sizeof(p.validFrom), o["validFrom"]);
+    copyField(p.validTo, sizeof(p.validTo), o["validTo"]);
+    copyField(p.barcodeValue, sizeof(p.barcodeValue), o["barcodeValue"]);
+    copyField(p.barcodeLabel, sizeof(p.barcodeLabel), o["barcodeLabel"]);
+    return p.permitNumber[0] && p.plateNumber[0] && p.validFrom[0] && p.validTo[0] &&
+           p.barcodeValue[0] && p.barcodeLabel[0];
+}
+
+static void bleShutdown(BLEClient *client)
+{
+    if (client) {
+        if (client->isConnected()) client->disconnect();
+        delete client;
+    }
+    if (targetDevice) {
         delete targetDevice;
         targetDevice = nullptr;
     }
+    BLEDevice::deinit(false);
+}
 
+// Scan for the phone, read the permits and the time, write back our status.
+// On SYNC_OK, store holds the phone's data (time is set too if the phone sent it).
+SyncResult syncWithPhone(uint32_t scanSeconds, uint8_t syncType, PermitStore &store, int batteryMv)
+{
+    Serial.printf("BLE: scanning %u s\n", scanSeconds);
     BLEDevice::init("ParkingDisplay");
+    BLEDevice::setMTU(256);  // whole permit JSON in few packets, status write in one
+
     BLEScan *scan = BLEDevice::getScan();
     scan->setAdvertisedDeviceCallbacks(new PermitScanCallback());
     scan->setActiveScan(true);
     scan->setInterval(100);
     scan->setWindow(99);
+    scan->start(scanSeconds, false);
 
-    scan->start(BLE_SCAN_TIME, false);
-
-    if (!deviceFound)
-    {
-        Serial.println("Phone not found in range");
-        BLEDevice::deinit(false);
-        return false;
+    if (!targetDevice) {
+        Serial.println("Phone not in range");
+        bleShutdown(nullptr);
+        return SYNC_NOT_FOUND;
     }
 
-    return true;
-}
-
-// Connect to phone and read permit data
-// Returns: 0 = error, 1 = updated, 2 = already up to date
-// syncType: 1=auto, 2=manual, 3=force
-int downloadPermitViaBluetooth(PermitData *data, const char *currentPermitNumber, uint8_t syncType = SYNC_TYPE_AUTO)
-{
-    if (!targetDevice)
-    {
-        Serial.println("No device to connect to");
-        return 0;
-    }
-
-    Serial.print("Connecting to ");
-    Serial.println(targetDevice->getAddress().toString().c_str());
-
-    bleClient = BLEDevice::createClient();
-
-    // Connect with timeout
-    unsigned long startTime = millis();
+    BLEClient *client = BLEDevice::createClient();
     bool connected = false;
-
-    while (millis() - startTime < BLE_CONNECT_TIMEOUT * 1000)
-    {
-        if (bleClient->connect(targetDevice))
-        {
-            connected = true;
-            break;
-        }
-        delay(500);
+    for (int attempt = 0; attempt < 2 && !connected; attempt++) {
+        connected = client->connect(targetDevice);
+        if (!connected) delay(300);
+    }
+    if (!connected) {
+        Serial.println("Connect failed");
+        bleShutdown(client);
+        return SYNC_FAILED;
     }
 
-    if (!connected)
-    {
-        Serial.println("Connection failed");
-        delete bleClient;
-        bleClient = nullptr;
-        BLEDevice::deinit(false);
-        return 0;
+    BLERemoteService *service = client->getService(BLEUUID(BLE_SERVICE_UUID));
+    BLERemoteCharacteristic *permitChar = service ? service->getCharacteristic(BLEUUID(BLE_PERMIT_CHAR_UUID)) : nullptr;
+    if (!permitChar) {
+        Serial.println("Permit characteristic not found");
+        bleShutdown(client);
+        return SYNC_FAILED;
     }
 
-    Serial.println("Connected!");
-
-    // Get the permit service
-    BLERemoteService *service = bleClient->getService(BLEUUID(BLE_SERVICE_UUID));
-    if (!service)
-    {
-        Serial.println("Service not found");
-        bleClient->disconnect();
-        delete bleClient;
-        bleClient = nullptr;
-        BLEDevice::deinit(false);
-        return 0;
-    }
-
-    // Write sync type before reading permit (so phone knows what kind of sync this is)
     BLERemoteCharacteristic *syncTypeChar = service->getCharacteristic(BLEUUID(BLE_SYNC_TYPE_CHAR_UUID));
-    if (syncTypeChar)
-    {
-        Serial.print("Writing sync type: ");
-        Serial.println(syncType);
-        syncTypeChar->writeValue(&syncType, 1, false);  // false = no response needed
-        delay(50);  // Let write complete
-    }
-    else
-    {
-        Serial.println("Sync type characteristic not found (old app version?)");
-    }
+    if (syncTypeChar) syncTypeChar->writeValue(&syncType, 1, false);
 
-    // Get the permit characteristic
-    BLERemoteCharacteristic *permitChar = service->getCharacteristic(BLEUUID(BLE_PERMIT_CHAR_UUID));
-    if (!permitChar)
-    {
-        Serial.println("Characteristic not found");
-        bleClient->disconnect();
-        delete bleClient;
-        bleClient = nullptr;
-        BLEDevice::deinit(false);
-        return 0;
-    }
+    String json = permitChar->readValue().c_str();
+    Serial.println(json);
 
-    // Read the permit JSON
-    std::string permitJsonStd = permitChar->readValue();
-    String permitJson = permitJsonStd.c_str();
-
-    Serial.println("Received permit data:");
-    Serial.println(permitJson.c_str());
-
-    // Disconnect first before any other operations
-    bleClient->disconnect();
-    delay(50);  // Let disconnect complete
-    delete bleClient;
-    bleClient = nullptr;
-    BLEDevice::deinit(false);
-    delay(100);  // Let BLE deinit fully complete before any Serial operations
-
-    // Parse JSON
     JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, permitJson);
+    PermitStore incoming = {};
+    if (deserializeJson(doc, json) || !parsePermit(doc.as<JsonVariantConst>(), incoming.slot[0])) {
+        Serial.println("Bad or incomplete permit JSON");
+        bleShutdown(client);
+        return SYNC_FAILED;
+    }
+    if (!doc["next"].isNull()) parsePermit(doc["next"], incoming.slot[1]);
+    incoming.displayFlipped = doc["displayFlipped"] | false;
+    if (doc["now"].is<long long>()) setLocalTime((time_t)doc["now"].as<long long>());
+    store = incoming;
 
-    if (error)
-    {
-        Serial.print("JSON parse error: ");
-        Serial.println(error.c_str());
-        return 0;
+    // Tell the phone what we'll show and what we're holding, plus the battery level
+    BLERemoteCharacteristic *statusChar = service->getCharacteristic(BLEUUID(BLE_STATUS_CHAR_UUID));
+    if (statusChar) {
+        int shown = chooseSlot(store);
+        int cached = shown == 0 ? 1 : 0;
+        char status[64];
+        snprintf(status, sizeof(status), "%s,%s,%d,%d",
+                 shown >= 0 ? store.slot[shown].permitNumber : "",
+                 shown >= 0 ? store.slot[cached].permitNumber : "",
+                 batteryMv, FW_VERSION);
+        statusChar->writeValue((uint8_t *)status, strlen(status), true);
     }
 
-    // Check if permit number exists
-    if (!doc["permitNumber"].is<const char *>())
-    {
-        Serial.println("No permit number in response");
-        return 0;
-    }
-
-    const char *newPermitNumber = doc["permitNumber"];
-
-    // Check for empty permit
-    if (strlen(newPermitNumber) == 0)
-    {
-        Serial.println("Empty permit received (phone may not have synced yet)");
-        return 0;
-    }
-
-    // Validate required fields exist
-    const char *plateNum = doc["plateNumber"] | "";
-    const char *validFrom = doc["validFrom"] | "";
-    const char *validTo = doc["validTo"] | "";
-    const char *barcodeVal = doc["barcodeValue"] | "";
-    const char *barcodeLbl = doc["barcodeLabel"] | "";
-
-    if (strlen(plateNum) == 0 || strlen(validFrom) == 0 || strlen(validTo) == 0 ||
-        strlen(barcodeVal) == 0 || strlen(barcodeLbl) == 0)
-    {
-        Serial.println("ERROR: Incomplete permit data - missing required fields");
-        Serial.printf("  permitNumber: %s\n", strlen(newPermitNumber) > 0 ? "OK" : "MISSING");
-        Serial.printf("  plateNumber: %s\n", strlen(plateNum) > 0 ? "OK" : "MISSING");
-        Serial.printf("  validFrom: %s\n", strlen(validFrom) > 0 ? "OK" : "MISSING");
-        Serial.printf("  validTo: %s\n", strlen(validTo) > 0 ? "OK" : "MISSING");
-        Serial.printf("  barcodeValue: %s\n", strlen(barcodeVal) > 0 ? "OK" : "MISSING");
-        Serial.printf("  barcodeLabel: %s\n", strlen(barcodeLbl) > 0 ? "OK" : "MISSING");
-        return 0;
-    }
-
-    // Copy permit data - zero out struct first to ensure null termination
-    memset(data, 0, sizeof(PermitData));
-    strncpy(data->permitNumber, newPermitNumber, sizeof(data->permitNumber) - 1);
-    strncpy(data->plateNumber, plateNum, sizeof(data->plateNumber) - 1);
-    strncpy(data->validFrom, validFrom, sizeof(data->validFrom) - 1);
-    strncpy(data->validTo, validTo, sizeof(data->validTo) - 1);
-    strncpy(data->barcodeValue, doc["barcodeValue"] | "", sizeof(data->barcodeValue) - 1);
-    strncpy(data->barcodeLabel, doc["barcodeLabel"] | "", sizeof(data->barcodeLabel) - 1);
-    data->displayFlipped = doc["displayFlipped"] | false;
-
-    // Check if permit changed (with null safety)
-    if (currentPermitNumber != nullptr && strcmp(data->permitNumber, currentPermitNumber) == 0)
-    {
-        Serial.println("Permit unchanged");
-        delay(10);  // Let serial flush
-        return 2; // Already up to date (but data is still populated)
-    }
-
-    Serial.print("New permit received: ");
-    Serial.println(data->permitNumber);
-
-    return 1; // Updated
-}
-
-// Clean up BLE resources
-void cleanupBluetooth()
-{
-    if (targetDevice)
-    {
-        delete targetDevice;
-        targetDevice = nullptr;
-    }
-    deviceFound = false;
-}
-
-// ============ BLE Server (for receiving commands from phone) ============
-
-static BLEServer *bleServer = nullptr;
-static BLECharacteristic *commandChar = nullptr;
-static bool serverRunning = false;
-
-class CommandCallbacks : public BLECharacteristicCallbacks
-{
-    void onWrite(BLECharacteristic *pCharacteristic)
-    {
-        std::string value = pCharacteristic->getValue();
-        if (value.length() > 0)
-        {
-            Serial.print("Received command: ");
-            Serial.println(value.c_str());
-
-            if (value == CMD_SYNC)
-            {
-                pendingCommand = 1;
-            }
-            else if (value == CMD_FORCE)
-            {
-                pendingCommand = 2;
-            }
-        }
-    }
-};
-
-class ServerCallbacks : public BLEServerCallbacks
-{
-    void onConnect(BLEServer *pServer)
-    {
-        Serial.println("Phone connected to display");
-    }
-
-    void onDisconnect(BLEServer *pServer)
-    {
-        Serial.println("Phone disconnected from display");
-        // Restart advertising
-        pServer->startAdvertising();
-    }
-};
-
-// Start BLE server to listen for commands
-void startBleServer()
-{
-    if (serverRunning)
-    {
-        Serial.println("BLE server already running");
-        return;
-    }
-
-    Serial.println("Starting BLE server...");
-
-    BLEDevice::init("ParkingDisplay");
-
-    bleServer = BLEDevice::createServer();
-    bleServer->setCallbacks(new ServerCallbacks());
-
-    BLEService *service = bleServer->createService(BLE_DISPLAY_SERVICE_UUID);
-
-    commandChar = service->createCharacteristic(
-        BLE_COMMAND_CHAR_UUID,
-        BLECharacteristic::PROPERTY_WRITE);
-
-    commandChar->setCallbacks(new CommandCallbacks());
-
-    service->start();
-
-    BLEAdvertising *advertising = BLEDevice::getAdvertising();
-    advertising->addServiceUUID(BLE_DISPLAY_SERVICE_UUID);
-    advertising->setScanResponse(true);
-    advertising->setMinPreferred(0x06);
-    advertising->setMinPreferred(0x12);
-    BLEDevice::startAdvertising();
-
-    serverRunning = true;
-    Serial.println("BLE server started, waiting for commands...");
-}
-
-// Stop BLE server (before doing client operations)
-void stopBleServer()
-{
-    if (!serverRunning)
-    {
-        return;
-    }
-
-    Serial.println("Stopping BLE server...");
-    BLEDevice::stopAdvertising();
-    BLEDevice::deinit(false);
-    bleServer = nullptr;
-    commandChar = nullptr;
-    serverRunning = false;
-    delay(100);
-}
-
-// Check if there's a pending command from phone
-int getPendingCommand()
-{
-    int cmd = pendingCommand;
-    pendingCommand = 0;
-    return cmd;
+    bleShutdown(client);
+    return SYNC_OK;
 }
 
 #endif
