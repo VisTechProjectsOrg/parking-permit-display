@@ -29,6 +29,9 @@ void ledOff() { digitalWrite(PIN_LED, HIGH); }
 // Battery voltage in mV. Returns ~4200+ or a bogus value on USB with no cell attached.
 int readBatteryMv()
 {
+#ifdef FAKE_BATTERY_MV
+    return FAKE_BATTERY_MV;  // test build only (env:fake_low_battery)
+#endif
     pinMode(PIN_ADC_CTRL, OUTPUT);
     digitalWrite(PIN_ADC_CTRL, HIGH);
     analogSetPinAttenuation(PIN_VBAT, ADC_2_5db);  // divider output tops out ~0.86V

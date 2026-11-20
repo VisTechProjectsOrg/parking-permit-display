@@ -50,11 +50,12 @@ void displayInit(bool flipped)
 
 void drawLowBatteryIcon()
 {
-  // Small empty battery between the title and the permit number
-  const int x = 276, y = 32;
-  display->drawRect(x, y, 16, 9, 0x0000);
-  display->fillRect(x + 16, y + 3, 2, 3, 0x0000);
-  display->fillRect(x + 2, y + 2, 3, 5, 0x0000);
+  // Nearly empty battery at the right end of the "permit" title line (free space there)
+  const int x = 264, y = 20, w = 26, h = 13;
+  display->drawRect(x, y, w, h, 0x0000);
+  display->drawRect(x + 1, y + 1, w - 2, h - 2, 0x0000);  // 2px outline
+  display->fillRect(x + w, y + 4, 3, h - 8, 0x0000);       // terminal nub
+  display->fillRect(x + 3, y + 3, 4, h - 6, 0x0000);       // low charge sliver
 }
 
 void displayPermit(const PermitData &p, bool lowBattery)
@@ -161,16 +162,9 @@ time_t scheduleCheckin(const PermitStore &store, int batteryMv)
   return now + 86400;
 }
 
-void setup()
+// One wake: sync if due, redraw if needed. Returns seconds until the next wake (0 = button only).
+uint32_t runWake(esp_sleep_wakeup_cause_t cause)
 {
-  powerInit();
-  Serial.begin(115200);
-  timeInit();
-
-  esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-  bool fromSleep = cause == ESP_SLEEP_WAKEUP_EXT0 || cause == ESP_SLEEP_WAKEUP_TIMER;
-  if (!fromSleep) delay(1500);  // power-on/flash: give the USB serial monitor a moment
-
   int batteryMv = readBatteryMv();
   bool batteryKnown = batteryMv >= BATTERY_PRESENT_MV;
   bool lowBattery = batteryKnown && batteryMv < BATTERY_LOW_MV;
@@ -255,7 +249,42 @@ void setup()
     time_t delta = wakeAt - time(nullptr);
     seconds = delta < 60 ? 60 : (delta > 86400 ? 86400 : (uint32_t)delta);
   }
+  return seconds;
+}
+
+void setup()
+{
+  powerInit();
+  Serial.begin(115200);
+  timeInit();
+
+  esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+  bool fromSleep = cause == ESP_SLEEP_WAKEUP_EXT0 || cause == ESP_SLEEP_WAKEUP_TIMER;
+  if (!fromSleep) delay(1500);  // power-on/flash: give the USB serial monitor a moment
+
+  uint32_t seconds = runWake(cause);
+
+#ifdef DEV_NO_SLEEP
+  // Dev build (env:dev): stay awake so USB, serial and flashing keep working. A button press
+  // or the scheduled time runs the same wake logic as a real wake from deep sleep.
+  while (true) {
+    Serial.printf("DEV: not sleeping. Next wake in %u s (button wakes now)\n", seconds);
+    unsigned long start = millis();
+    cause = ESP_SLEEP_WAKEUP_TIMER;
+    while (seconds == 0 || millis() - start < seconds * 1000UL) {
+      if (digitalRead(PIN_BUTTON) == LOW) {
+        cause = ESP_SLEEP_WAKEUP_EXT0;
+        break;
+      }
+      delay(20);
+    }
+    seconds = runWake(cause);
+    ledOff();  // deepSleep() normally does this
+    while (digitalRead(PIN_BUTTON) == LOW) delay(20);  // wait for release
+  }
+#else
   deepSleep(seconds);
+#endif
 }
 
 void loop() {}  // never reached: deep sleep wakes into setup()

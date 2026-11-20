@@ -11,6 +11,13 @@ pio run -e vision_e290 --target upload
 pio device monitor
 ```
 
+### Dev build (no deep sleep: serial + flashing keep working, button and check-ins still run)
+```bash
+pio run -e dev --target upload
+```
+`fake_low_battery` = dev build reporting 3.45V, to check the low-battery icon and app notification.
+Flashing the production build onto a sleeping board: hold BOOT, tap RST, release BOOT, then upload.
+
 ### Standard ESP32 (testing, no display)
 ```bash
 pio run -e esp32dev --target upload
