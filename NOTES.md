@@ -167,18 +167,23 @@ theoretical on 200mAh (~6-10 realistic after derating + self-discharge). Premise
 ## TODO (battery firmware)
 - [x] Minimal sleep-test sketch (`sleep_test.cpp`) -- LoRa sleep + Vext/LED off + deep sleep.
 - [x] Flash `sleep_test` + measure deep-sleep current -- **measured ~20µA (0.02mA) on 2026-06-25.** PASS.
-- [ ] Find `VBAT_Read` + `ADC_Ctrl` GPIOs from Heltec's VisionMaster board file/docs.
-- [ ] Battery read: assert ADC_Ctrl -> analogRead -> / 0.204 -> de-assert (divider 390k/100k).
-- [ ] Power-source detect (charge-IC CHRG/DONE or VBAT_Read): USB -> stay awake + charge; battery -> deep sleep.
-- [ ] Store `validTo` + "next permit cached" flag in RTC memory (survives deep sleep).
-- [ ] Wake-source dispatch: button -> BLE sync; timer -> midnight flip / advertise window.
-- [ ] Compute sleep duration from `validTo` (long normally; precise wake at midnight on expiry day).
-- [ ] Last-day periodic advertise windows to auto-receive the new permit over BLE.
-- [ ] Cache next permit in flash; midnight redraw from cache (no BLE needed).
-- [ ] Low-voltage cutoff: stop waking / show "low battery" before VBAT ~3.0V (no hardware BMS).
-- [ ] Verify charge current (PROG resistor) is safe for a 200mAh cell; use a protected cell.
+- [x] `VBAT_Read` = GPIO7, `ADC_Ctrl` = GPIO46 active HIGH (Meshtastic `heltec_vision_master_e290/variant.h`, multiplier 4.9 x 1.03).
+- [x] Battery read in `power_helper.h` (divider on only while measuring).
+- [x] Power-source detect: dropped. Same sleep cycle on USB and battery; USB just charges. Simpler, and a
+      car USB port with no data would have looked like battery anyway.
+- [x] Wake dispatch: button -> sync; timer -> check-in and/or handoff; power-on -> sync + redraw.
+- [x] Two permits cached in NVS; handoff at the next permit's `validFrom` from cache, no BLE needed.
+- [x] Display scans for the phone instead of advertising (the phone already advertises 24/7):
+      8 AM + 7 PM daily, every 30 min by day once coverage ends within 24h.
+- [x] Low battery: icon below 3.5V, timed check-ins stop below 3.3V (button + handoffs still work).
+- [x] Charge current: LGS4056H fixed at ~500mA (retailer spec). Too much for a 200mAh / 0.2A cell.
+      Use a protected cell of 500mAh or more.
+- [ ] VERIFY on hardware: battery reading vs a multimeter; sleep current with the new firmware
+      (target still ~20uA); a full sync cycle; the midnight handoff.
+- [ ] VERIFY: clock drift over a week in deep sleep (internal RC clock, no 32k crystal confirmed).
+      Each phone sync resets it, so drift only matters if the phone isn't near the car for days.
 - [ ] Confirm graceful failure: if the battery dies, the e-ink just holds the last image.
-- [ ] Integrate into `main.cpp` behind power-source detect; retire the buyer's server-side 4 PM flip.
+- [ ] Retire the buyer's server-side 4 PM flip once the battery firmware is proven.
 
 ---
 
