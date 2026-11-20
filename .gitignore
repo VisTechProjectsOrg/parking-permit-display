@@ -14,3 +14,6 @@ src/wifi_config.h
 *.png
 *.bmp
 *.py
+
+# Personal task list
+TODO.md
