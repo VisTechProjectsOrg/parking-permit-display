@@ -17,3 +17,4 @@ src/wifi_config.h
 
 # Personal task list
 TODO.md
+!datasheets/*.pdf

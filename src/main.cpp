@@ -20,6 +20,13 @@
 static const int BATTERY_LOW_MV      = 3500;  // show the low-battery icon
 static const int BATTERY_CRITICAL_MV = 3300;  // stop timed check-ins; handoffs + button only
 static const int BATTERY_PRESENT_MV  = 2500;  // below this the reading is junk (USB, no cell)
+static const int BATTERY_FULL_MV     = 4150;  // the app's 100%
+static const int CHARGING_RISE_MV    = 30;    // above the last check-in = it's been charging
+static const int UNPLUG_DROP_MV      = 30;    // this far below the charging peak = unplugged
+static const uint32_t CHARGE_POLL_S  = 300;   // while charging, check the battery this often
+static const int CHARGE_MAX_POLLS    = 72;    // and give up after 6 hours of it
+static const int RESTART_WATCH_POLLS = 3;     // after a restart: 3 checks, CHARGE_POLL_S apart
+static const int WATCH_RISE_MV       = 20;    // climbing this much since the restart = charging
 
 // ----- Check-in schedule (local time) -----
 static const int CHECKIN_HOURS[] = {8, 19};         // routine daily check-ins
@@ -37,8 +44,22 @@ static const uint32_t RESET_PRESS_MS = 10000;      // forget the phone and the p
 // which case we redraw once.
 RTC_DATA_ATTR char shownPermit[20] = "";
 RTC_DATA_ATTR bool shownFlipped = false;
-RTC_DATA_ATTR bool shownLowBattery = false;
+RTC_DATA_ATTR int shownIcon = 0;  // BatteryIcon on screen
 RTC_DATA_ATTR time_t nextCheckinAt = 0;
+
+// Charging mode. The board can't see USB, so: a button press reading well above the last
+// scheduled wake (baselineMv) means it was plugged in since. Then poll every few minutes, show a
+// charging / full icon on the permit, and leave the mode when the voltage drops off its peak
+// (unplugged) or after CHARGE_MAX_POLLS.
+enum BatteryIcon { ICON_NONE = 0, ICON_LOW, ICON_CHARGING, ICON_FULL };
+RTC_DATA_ATTR int baselineMv = 0;
+RTC_DATA_ATTR bool chargingMode = false;
+RTC_DATA_ATTR int chargePeakMv = 0;
+RTC_DATA_ATTR int chargePolls = 0;
+// After a restart (e.g. a battery swap while plugged in) there's no earlier reading to compare
+// a button press with, so check a few more times: still climbing = it's on the charger.
+RTC_DATA_ATTR int watchPolls = 0;
+RTC_DATA_ATTR int watchStartMv = 0;
 
 EInkDisplay_VisionMasterE290 *display = nullptr;
 
@@ -49,17 +70,28 @@ void displayInit(bool flipped)
   display->setRotation(flipped ? 3 : 1);
 }
 
-void drawLowBatteryIcon()
+// Battery at the right end of the "permit" title line (free space there): nearly empty, charging
+// (bolt), or full
+void drawBatteryIcon(int icon)
 {
-  // Nearly empty battery at the right end of the "permit" title line (free space there)
+  if (icon == ICON_NONE) return;
   const int x = 264, y = 20, w = 26, h = 13;
   display->drawRect(x, y, w, h, 0x0000);
   display->drawRect(x + 1, y + 1, w - 2, h - 2, 0x0000);  // 2px outline
   display->fillRect(x + w, y + 4, 3, h - 8, 0x0000);       // terminal nub
-  display->fillRect(x + 3, y + 3, 4, h - 6, 0x0000);       // low charge sliver
+  if (icon == ICON_LOW) {
+    display->fillRect(x + 3, y + 3, 4, h - 6, 0x0000);     // low charge sliver
+  } else if (icon == ICON_FULL) {
+    display->fillRect(x + 3, y + 3, w - 6, h - 6, 0x0000); // full
+  } else {
+    // Bolt: two filled triangles meeting in the middle
+    const int cx = x + w / 2;
+    display->fillTriangle(cx + 2, y + 2, cx - 4, y + 7, cx + 1, y + 7, 0x0000);
+    display->fillTriangle(cx - 1, y + 6, cx + 4, y + 6, cx - 2, y + h - 2, 0x0000);
+  }
 }
 
-void displayPermit(const PermitData &p, bool lowBattery)
+void displayPermit(const PermitData &p, int batteryIcon)
 {
   display->clearMemory();
   display->setFont((GFXfont *)&FreeSansBold8pt7b);
@@ -104,7 +136,7 @@ void displayPermit(const PermitData &p, bool lowBattery)
   display->setCursor(DATE_VAL_X, DATE_TO_Y);
   display->print(dateVal);
 
-  if (lowBattery) drawLowBatteryIcon();
+  drawBatteryIcon(batteryIcon);
 
   // ========== SEPARATOR ==========
   display->drawLine(0, SEPARATOR_Y, SCREEN_W - 1, SEPARATOR_Y, 0x0000);
@@ -196,6 +228,35 @@ uint32_t runWake(esp_sleep_wakeup_cause_t cause)
   bool lowBattery = batteryKnown && batteryMv < BATTERY_LOW_MV;
   Serial.printf("\n=== Wake: cause %d, battery %d mV, clock %s ===\n",
                 (int)cause, batteryMv, timeValid() ? "set" : "unset");
+  // ----- Charging mode (see chargingMode) -----
+  if (chargingMode) {
+    chargePolls++;
+    if (!batteryKnown || batteryMv < chargePeakMv - UNPLUG_DROP_MV || chargePolls > CHARGE_MAX_POLLS) {
+      Serial.println("Charging mode off (unplugged or timed out)");
+      chargingMode = false;
+    } else if (batteryMv > chargePeakMv) {
+      chargePeakMv = batteryMv;
+    }
+  } else if ((cause == ESP_SLEEP_WAKEUP_EXT0 && batteryKnown && baselineMv >= BATTERY_PRESENT_MV
+              && batteryMv > baselineMv + CHARGING_RISE_MV)
+             || (cause == ESP_SLEEP_WAKEUP_TIMER && watchPolls > 0 && batteryKnown
+                 && batteryMv > watchStartMv + WATCH_RISE_MV)) {
+    Serial.println("Charging mode on");
+    chargingMode = true;
+    chargePeakMv = batteryMv;
+    chargePolls = 0;
+    watchPolls = 0;
+  } else if (cause == ESP_SLEEP_WAKEUP_TIMER && watchPolls > 0) {
+    watchPolls--;
+  }
+  bool restarted = cause != ESP_SLEEP_WAKEUP_EXT0 && cause != ESP_SLEEP_WAKEUP_TIMER;
+  if (restarted && batteryKnown && !chargingMode) {
+    watchPolls = RESTART_WATCH_POLLS;
+    watchStartMv = batteryMv;
+  }
+  if (!chargingMode && cause != ESP_SLEEP_WAKEUP_EXT0 && batteryKnown) baselineMv = batteryMv;
+  int batteryIcon = chargingMode ? (batteryMv >= BATTERY_FULL_MV ? ICON_FULL : ICON_CHARGING)
+                                 : (lowBattery ? ICON_LOW : ICON_NONE);
 
   PermitStore store;
   loadPermits(store);
@@ -238,6 +299,9 @@ uint32_t runWake(esp_sleep_wakeup_cause_t cause)
   } else if (cause == ESP_SLEEP_WAKEUP_TIMER) {
     // Timer: a check-in, or just the handoff to the cached permit
     doSync = nextCheckinAt != 0 && time(nullptr) >= nextCheckinAt - 120;
+    // Charging: every poll syncs too, so the app's bolt and % follow along and drop at unplug
+    // (on USB power this shouldn't cost the battery anything)
+    if (chargingMode) doSync = true;
   } else {
     // Power-on (battery connected, flashed, reset): sync and redraw once
     doSync = true;
@@ -251,9 +315,12 @@ uint32_t runWake(esp_sleep_wakeup_cause_t cause)
     bool allowClaim = cause != ESP_SLEEP_WAKEUP_TIMER;
     SyncResult result = syncWithPhone(scanSeconds, syncType, fresh, batteryMv, allowClaim);
     // The phone got the miss counts with this sync's status, so start over
+    // (a charging poll that misses the phone isn't a missed check-in)
+    bool countsAsCheckin = !(chargingMode && cause == ESP_SLEEP_WAKEUP_TIMER
+                             && !(nextCheckinAt != 0 && time(nullptr) >= nextCheckinAt - 120));
     if (result == SYNC_OK) missNotFound = missFailed = 0;
-    else if (result == SYNC_NOT_FOUND) missNotFound++;
-    else if (result == SYNC_FAILED) missFailed++;
+    else if (result == SYNC_NOT_FOUND && countsAsCheckin) missNotFound++;
+    else if (result == SYNC_FAILED && countsAsCheckin) missFailed++;
     if (result == SYNC_UNPAIRED) {
       displayInit(false);
       displayUnpaired();
@@ -280,13 +347,13 @@ uint32_t runWake(esp_sleep_wakeup_cause_t cause)
   if (slot >= 0) {
     const PermitData &p = store.slot[slot];
     if (forceRedraw || strcmp(shownPermit, p.permitNumber) != 0 ||
-        shownFlipped != store.displayFlipped || shownLowBattery != lowBattery) {
+        shownFlipped != store.displayFlipped || shownIcon != batteryIcon) {
       Serial.printf("Drawing permit %s\n", p.permitNumber);
       displayInit(store.displayFlipped);
-      displayPermit(p, lowBattery);
+      displayPermit(p, batteryIcon);
       strlcpy(shownPermit, p.permitNumber, sizeof(shownPermit));
       shownFlipped = store.displayFlipped;
-      shownLowBattery = lowBattery;
+      shownIcon = batteryIcon;
     }
   } else if (strcmp(shownPermit, "-") != 0) {
     displayInit(store.displayFlipped);
@@ -307,6 +374,7 @@ uint32_t runWake(esp_sleep_wakeup_cause_t cause)
     time_t delta = wakeAt - time(nullptr);
     seconds = delta < 60 ? 60 : (delta > 86400 ? 86400 : (uint32_t)delta);
   }
+  if ((chargingMode || watchPolls > 0) && (seconds == 0 || seconds > CHARGE_POLL_S)) seconds = CHARGE_POLL_S;
   return seconds;
 }
 
@@ -329,6 +397,7 @@ void setup()
   // Dev build (env:dev): stay awake so USB, serial and flashing keep working. A button press
   // or the scheduled time runs the same wake logic as a real wake from deep sleep.
   while (true) {
+    ledOff();  // deepSleep() normally does this; without it the LED stays on after a restart
     Serial.printf("DEV: not sleeping. Next wake in %u s (button wakes now)\n", seconds);
     unsigned long start = millis();
     cause = ESP_SLEEP_WAKEUP_TIMER;

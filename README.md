@@ -36,6 +36,8 @@ flowchart LR
 | **Short press** | Sync with the phone now |
 | **Long press (3s)** | Sync and redraw even if nothing changed |
 | **Hold 10s** | Reset: forget the phone and the permits (LED goes out at 3s, back on at 10s) |
+| **After a press** | Two quick blinks = synced, one long blink = couldn't reach the phone |
+| **Press after plugging in** | Charging mode: bolt on the screen (full icon when done) until unplugged |
 | **Low battery** | Battery icon on the display, notification in the app |
 
 ## Setup

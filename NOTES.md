@@ -272,6 +272,24 @@ VERIFY before changing the schedule (unmeasured):
 - [ ] Real drain from the app's days-left estimate after a few weeks in the car.
 
 Ideas, not started:
+- **Show charging on the e-ink automatically (hardware mod).** The board has no USB-present pin, so
+  the display can't tell it's plugged in. Plan (board is **V0.3.1**, matches
+  `datasheets/HT-VME290_Schematic_V0.3.1.pdf`; the datasheet's header table is a different revision):
+  - **Chip side: GPIO17 = header P4 pin 35.** Free in both docs, RTC-capable (deep-sleep wake), not a
+    strapping pin (0/3/45/46), no pull-up or other part on it in the schematic. No soldering.
+  - **Signal: VDD_5V (USB)** via a divider, 100k top / 150k bottom => ~2.85-3.15V over USB 4.75-5.25V,
+    0V unplugged (no battery drain). Header pins 2/4 ("5V" in the datasheet) are **not connected on
+    V0.3.1**, so this needs one soldered wire to a VDD_5V point: R17's right end, U6 CE (pin 8) or
+    C26 per the schematic.
+  - Not CHRG: on this board U6 DONE (pin 6) is tied to GND, and CHRG idles near 5V through R17 330R
+    + LED1, so it can't tell full from unplugged and isn't 3.3V-safe without protection.
+  - Firmware: ext1 wake on GPIO17 high (plug-in) and low (unplug); button stays on ext0. "Full" from
+    voltage. Replaces the guesswork in charging mode.
+  - **VERIFY before soldering:** meter the chosen pad (5V on USB, 0V off); ESP32-S3 datasheet for
+    GPIO17 input limits and ext1 wake modes (not read yet); cold review of the plan.
+  Until then (firmware 6): a button press after plugging in, or a restart while plugged in that sees
+  the voltage climb, starts charging mode (bolt on the e-ink and in the app, polls every 5 min,
+  clears on unplug or after 6 h).
 - **Permit per display:** each display tied to a car, so one stays in each car. Usually only one
   permit is active, so the autobuyer keeps buying for the default vehicle; needs `/api/permit?plate=`
   and a Car picker per display in the app. Two cars at once would mean per-car autobuy (bigger).

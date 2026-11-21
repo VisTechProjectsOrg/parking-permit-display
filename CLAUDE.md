@@ -26,7 +26,8 @@ pio device monitor
 
 ## Hardware
 - **Board**: Heltec Vision Master E290 (ESP32-S3 + 2.9" e-ink)
-- **Button**: GPIO 21 (short press = BLE sync, hold 3s = force redraw, hold 10s = reset pairing + permits); wakes from deep sleep
+- **Button**: GPIO 21 (short press = BLE sync, hold 3s = force redraw, hold 10s = reset pairing + permits); wakes from deep sleep.
+  LED: on while held (off at 3s, on at 10s), then two quick blinks = synced, one long = failed.
 - **LED**: GPIO 45 (active LOW)
 - **Battery**: sense on GPIO 7, divider switched on by GPIO 46 (HIGH), multiplier 4.9 x 1.03
 - **Charger**: LGS4056H, fixed ~500mA: use a protected cell of 500mAh or more
@@ -40,6 +41,10 @@ Every wake is one pass through `setup()`, then deep sleep (~20uA measured):
 - Clock comes from the phone on each sync (local time, stored as UTC); lost on power loss.
 - Check-ins: 8 AM and 7 PM; every 30 min (7 AM-9 PM) once coverage ends within 24h;
   hourly if the clock is unset; none below 3.3V (button + handoffs only). Low-battery icon below 3.5V.
+- Charging: the board can't see USB. A button press reading 30 mV+ above the last scheduled wake (or a
+  restart followed by a 20 mV climb) starts charging mode: bolt / full icon on the permit, a poll + sync
+  every 5 min, off when the voltage drops 30 mV off its peak (unplugged) or after 6 h. Proper USB sense
+  needs a wire (NOTES.md, "Show charging on the e-ink automatically").
 
 ## Key Files
 - `src/main.cpp` - Wake/sync/draw/sleep flow and drawing

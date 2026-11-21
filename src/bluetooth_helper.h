@@ -22,7 +22,9 @@
 #define SYNC_TYPE_MANUAL 2  // button press
 #define SYNC_TYPE_FORCE  3  // long press
 
-#define FW_VERSION 4
+#define FW_VERSION 6
+
+extern bool chargingMode;  // main.cpp: the display thinks it's on the charger (sent to the app)
 
 // Check-ins that failed since the last good one, sent with the next good one. RTC memory:
 // survives deep sleep, lost on a restart (which the restart count shows instead).
@@ -198,7 +200,7 @@ SyncResult syncWithPhone(uint32_t scanSeconds, uint8_t syncType, PermitStore &st
     store = incoming;
 
     // Tell the phone what we'll show and what we're holding, the battery level, and dev info:
-    // "shown,cached,mv,fw,missNotFound,missFailed,lastRestartReason,restarts"
+    // "shown,cached,mv,fw,missNotFound,missFailed,lastRestartReason,restarts,charging"
     BLERemoteCharacteristic *statusChar = service->getCharacteristic(BLEUUID(BLE_STATUS_CHAR_UUID));
     if (statusChar) {
         int shown = chooseSlot(store);
@@ -207,10 +209,11 @@ SyncResult syncWithPhone(uint32_t scanSeconds, uint8_t syncType, PermitStore &st
         int reason;
         loadRestartStats(boots, reason);
         char status[96];
-        snprintf(status, sizeof(status), "%s,%s,%d,%d,%u,%u,%d,%u",
+        snprintf(status, sizeof(status), "%s,%s,%d,%d,%u,%u,%d,%u,%d",
                  shown >= 0 ? store.slot[shown].permitNumber : "",
                  shown >= 0 ? store.slot[cached].permitNumber : "",
-                 batteryMv, FW_VERSION, missNotFound, missFailed, reason, (unsigned)boots);
+                 batteryMv, FW_VERSION, missNotFound, missFailed, reason, (unsigned)boots,
+                 chargingMode ? 1 : 0);
         // A write longer than the link's packet size gets cut off. The bigger MTU is requested
         // on connect but settles asynchronously, so give it a moment; if it's still the 23-byte
         // default, send just the first four fields (they fit) rather than a chopped string.
