@@ -22,7 +22,7 @@
 #define SYNC_TYPE_MANUAL 2  // button press
 #define SYNC_TYPE_FORCE  3  // long press
 
-#define FW_VERSION 6
+#define FW_VERSION 7
 
 extern bool chargingMode;  // main.cpp: the display thinks it's on the charger (sent to the app)
 
