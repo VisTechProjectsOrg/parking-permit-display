@@ -25,8 +25,10 @@ static const int CHARGING_RISE_MV    = 30;    // above the last check-in = it's 
 static const int UNPLUG_DROP_MV      = 30;    // this far below the charging peak = unplugged
 static const uint32_t CHARGE_POLL_S  = 300;   // while charging, check the battery this often
 static const int CHARGE_MAX_POLLS    = 72;    // and give up after 6 hours of it
-static const int RESTART_WATCH_POLLS = 3;     // after a restart: 3 checks, CHARGE_POLL_S apart
-static const int WATCH_RISE_MV       = 20;    // climbing this much since the restart = charging
+static const int WATCH_POLLS         = 4;     // after a restart or a press: 4 checks, CHARGE_POLL_S apart
+static const int WATCH_RISE_MV       = 20;    // climbing this much since the watch started = charging
+static const int STEP_RISE_MV        = 3;     // a check this far above the last one counts as a rise
+static const int RISES_IN_ROW        = 2;     // ...and this many in a row = charging (on battery it only falls)
 
 // ----- Check-in schedule (local time) -----
 static const int CHECKIN_HOURS[] = {8, 19};         // routine daily check-ins
@@ -45,6 +47,7 @@ static const uint32_t RESET_PRESS_MS = 10000;      // forget the phone and the p
 RTC_DATA_ATTR char shownPermit[20] = "";
 RTC_DATA_ATTR bool shownFlipped = false;
 RTC_DATA_ATTR int shownIcon = 0;  // BatteryIcon on screen
+RTC_DATA_ATTR int shownPct = -1;  // charge % next to the icon, -1 = none
 RTC_DATA_ATTR time_t nextCheckinAt = 0;
 
 // Charging mode. The board can't see USB, so: a button press reading well above the last
@@ -56,10 +59,12 @@ RTC_DATA_ATTR int baselineMv = 0;
 RTC_DATA_ATTR bool chargingMode = false;
 RTC_DATA_ATTR int chargePeakMv = 0;
 RTC_DATA_ATTR int chargePolls = 0;
-// After a restart (e.g. a battery swap while plugged in) there's no earlier reading to compare
-// a button press with, so check a few more times: still climbing = it's on the charger.
+// Climb watch: after a restart (no earlier reading to compare with) or a button press that saw
+// no jump, check a few more times. Still climbing = it's on the charger.
 RTC_DATA_ATTR int watchPolls = 0;
 RTC_DATA_ATTR int watchStartMv = 0;
+RTC_DATA_ATTR int watchLastMv = 0;
+RTC_DATA_ATTR int watchRises = 0;
 
 EInkDisplay_VisionMasterE290 *display = nullptr;
 
@@ -91,7 +96,8 @@ void drawBatteryIcon(int icon)
   }
 }
 
-void displayPermit(const PermitData &p, int batteryIcon)
+// chargePct >= 0: shown next to the battery icon while charging
+void displayPermit(const PermitData &p, int batteryIcon, int chargePct)
 {
   display->clearMemory();
   display->setFont((GFXfont *)&FreeSansBold8pt7b);
@@ -137,6 +143,16 @@ void displayPermit(const PermitData &p, int batteryIcon)
   display->print(dateVal);
 
   drawBatteryIcon(batteryIcon);
+  if (chargePct >= 0) {
+    // Right-aligned just left of the icon, lined up with it (icon spans y 20-33)
+    char pct[8];
+    snprintf(pct, sizeof(pct), "%d%%", chargePct);
+    int16_t x1, y1;
+    uint16_t w, h;
+    display->getTextBounds(pct, 0, 0, &x1, &y1, &w, &h);
+    display->setCursor(259 - w, 32);
+    display->print(pct);
+  }
 
   // ========== SEPARATOR ==========
   display->drawLine(0, SEPARATOR_Y, SCREEN_W - 1, SEPARATOR_Y, 0x0000);
@@ -159,6 +175,36 @@ void displayMessage(const char *message)
   display->getTextBounds((char *)message, 0, 0, &x1, &y1, &w, &h);
   display->setCursor((SCREEN_W - w) / 2, (SCREEN_H + h) / 2);
   display->print(message);
+  display->update();
+}
+
+// Full-screen charging view (default; env:charge_icon turns it off for the small icon on the
+// permit): a big battery filled to the charge, and "Charging 80%" or "Battery full". The permit
+// comes back on unplug. Fine because it's charged indoors / not in use.
+#ifndef CHARGE_FULL_SCREEN
+#define CHARGE_FULL_SCREEN 1
+#endif
+
+void displayChargeScreen(int pct, bool full)
+{
+  display->clearMemory();
+  display->setFont(&FreeSansBold8pt7b);
+  display->setTextSize(1);
+
+  const int w = 140, h = 56, x = (SCREEN_W - w - 8) / 2, y = 22;  // battery + text centred
+  for (int i = 0; i < 3; i++) display->drawRect(x + i, y + i, w - 2 * i, h - 2 * i, 0x0000);  // 3px outline
+  display->fillRect(x + w, y + 16, 8, h - 32, 0x0000);                                      // terminal nub
+  int inner = w - 12;
+  display->fillRect(x + 6, y + 6, inner * (full ? 100 : pct) / 100, h - 12, 0x0000);
+
+  char line[24];
+  if (full) snprintf(line, sizeof(line), "Battery full");
+  else snprintf(line, sizeof(line), "Charging  %d%%", pct);
+  int16_t x1, y1;
+  uint16_t tw, th;
+  display->getTextBounds(line, 0, 0, &x1, &y1, &tw, &th);
+  display->setCursor((SCREEN_W - tw) / 2, y + h + 26);
+  display->print(line);
   display->update();
 }
 
@@ -229,32 +275,59 @@ uint32_t runWake(esp_sleep_wakeup_cause_t cause)
   Serial.printf("\n=== Wake: cause %d, battery %d mV, clock %s ===\n",
                 (int)cause, batteryMv, timeValid() ? "set" : "unset");
   // ----- Charging mode (see chargingMode) -----
+#ifdef FORCE_CHARGING
+  // Demo build only (env:charge_demo): act as if just plugged in, to see the charging view
+  if (!chargingMode && batteryKnown) {
+    chargingMode = true;
+    chargePeakMv = batteryMv;
+    chargePolls = 0;
+  }
+#endif
   if (chargingMode) {
     chargePolls++;
     if (!batteryKnown || batteryMv < chargePeakMv - UNPLUG_DROP_MV || chargePolls > CHARGE_MAX_POLLS) {
       Serial.println("Charging mode off (unplugged or timed out)");
       chargingMode = false;
+      watchPolls = 0;
+      // Start comparing from the battery at rest again, not the old pre-charge reading
+      if (batteryKnown) baselineMv = batteryMv;
     } else if (batteryMv > chargePeakMv) {
       chargePeakMv = batteryMv;
     }
-  } else if ((cause == ESP_SLEEP_WAKEUP_EXT0 && batteryKnown && baselineMv >= BATTERY_PRESENT_MV
-              && batteryMv > baselineMv + CHARGING_RISE_MV)
-             || (cause == ESP_SLEEP_WAKEUP_TIMER && watchPolls > 0 && batteryKnown
-                 && batteryMv > watchStartMv + WATCH_RISE_MV)) {
-    Serial.println("Charging mode on");
-    chargingMode = true;
-    chargePeakMv = batteryMv;
-    chargePolls = 0;
-    watchPolls = 0;
-  } else if (cause == ESP_SLEEP_WAKEUP_TIMER && watchPolls > 0) {
-    watchPolls--;
+  } else {
+    if (cause == ESP_SLEEP_WAKEUP_TIMER && watchPolls > 0 && batteryKnown) {
+      watchRises = batteryMv >= watchLastMv + STEP_RISE_MV ? watchRises + 1 : 0;
+      watchLastMv = batteryMv;
+    }
+    // A jump since the last scheduled wake (button press), or a steady climb during a watch
+    bool jumped = cause == ESP_SLEEP_WAKEUP_EXT0 && batteryKnown && baselineMv >= BATTERY_PRESENT_MV
+                  && batteryMv > baselineMv + CHARGING_RISE_MV;
+    bool climbing = cause == ESP_SLEEP_WAKEUP_TIMER && watchPolls > 0 && batteryKnown
+                    && (batteryMv > watchStartMv + WATCH_RISE_MV || watchRises >= RISES_IN_ROW);
+    if (jumped || climbing) {
+      Serial.println(jumped ? "Charging mode on (jump)" : "Charging mode on (climbing)");
+      chargingMode = true;
+      chargePeakMv = batteryMv;
+      chargePolls = 0;
+      watchPolls = 0;
+    } else {
+      if (cause == ESP_SLEEP_WAKEUP_TIMER && watchPolls > 0) watchPolls--;
+      // A restart, or a press that saw no jump: watch for a climb over the next checks
+      bool restarted = cause != ESP_SLEEP_WAKEUP_EXT0 && cause != ESP_SLEEP_WAKEUP_TIMER;
+      // A scheduled wake that finds a jump (plugged in and left) watches too, and keeps the
+      // pre-jump reading: a jump alone could also be a charge that already ended and got unplugged
+      bool timerJump = cause == ESP_SLEEP_WAKEUP_TIMER && watchPolls == 0 && batteryKnown
+                       && baselineMv >= BATTERY_PRESENT_MV && batteryMv > baselineMv + CHARGING_RISE_MV;
+      if ((restarted || cause == ESP_SLEEP_WAKEUP_EXT0 || timerJump) && batteryKnown) {
+        watchPolls = WATCH_POLLS;
+        watchStartMv = watchLastMv = batteryMv;
+        watchRises = 0;
+      }
+      if (cause != ESP_SLEEP_WAKEUP_EXT0 && batteryKnown && !timerJump) baselineMv = batteryMv;
+    }
   }
-  bool restarted = cause != ESP_SLEEP_WAKEUP_EXT0 && cause != ESP_SLEEP_WAKEUP_TIMER;
-  if (restarted && batteryKnown && !chargingMode) {
-    watchPolls = RESTART_WATCH_POLLS;
-    watchStartMv = batteryMv;
-  }
-  if (!chargingMode && cause != ESP_SLEEP_WAKEUP_EXT0 && batteryKnown) baselineMv = batteryMv;
+  // While charging, the % next to the icon in 10% steps: each e-ink redraw flashes the screen
+  int chargePct = chargingMode && batteryMv < BATTERY_FULL_MV ? batteryPercent(batteryMv) / 10 * 10 : -1;
   int batteryIcon = chargingMode ? (batteryMv >= BATTERY_FULL_MV ? ICON_FULL : ICON_CHARGING)
                                  : (lowBattery ? ICON_LOW : ICON_NONE);
 
@@ -344,16 +417,27 @@ uint32_t runWake(esp_sleep_wakeup_cause_t cause)
 
   // ----- Redraw if what should be shown differs from what is shown -----
   int slot = chooseSlot(store);
-  if (slot >= 0) {
+  if (CHARGE_FULL_SCREEN && chargingMode && batteryKnown) {
+    // Charging view instead of the permit (only safe where it's charged indoors / not in use)
+    int pct = batteryPercent(batteryMv) / 10 * 10;
+    if (forceRedraw || strcmp(shownPermit, "+charge") != 0 || shownIcon != batteryIcon || shownPct != pct) {
+      displayInit(store.displayFlipped);
+      displayChargeScreen(pct, batteryIcon == ICON_FULL);
+      strlcpy(shownPermit, "+charge", sizeof(shownPermit));
+      shownIcon = batteryIcon;
+      shownPct = pct;
+    }
+  } else if (slot >= 0) {
     const PermitData &p = store.slot[slot];
     if (forceRedraw || strcmp(shownPermit, p.permitNumber) != 0 ||
-        shownFlipped != store.displayFlipped || shownIcon != batteryIcon) {
+        shownFlipped != store.displayFlipped || shownIcon != batteryIcon || shownPct != chargePct) {
       Serial.printf("Drawing permit %s\n", p.permitNumber);
       displayInit(store.displayFlipped);
-      displayPermit(p, batteryIcon);
+      displayPermit(p, batteryIcon, chargePct);
       strlcpy(shownPermit, p.permitNumber, sizeof(shownPermit));
       shownFlipped = store.displayFlipped;
       shownIcon = batteryIcon;
+      shownPct = chargePct;
     }
   } else if (strcmp(shownPermit, "-") != 0) {
     displayInit(store.displayFlipped);
