@@ -217,7 +217,9 @@ uint32_t runWake(esp_sleep_wakeup_cause_t cause)
       delay(10);
     }
     unsigned long held = millis() - start;
-    ledOn();
+    // Released: dark during the sync, then ledSignal shows the result (one clean signal)
+    if (held >= RESET_PRESS_MS) ledOn();
+    else ledOff();
     if (held >= RESET_PRESS_MS) {
       Serial.println("10s hold: reset pairing and permits");
       clearOwner();
