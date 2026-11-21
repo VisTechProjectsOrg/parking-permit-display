@@ -55,7 +55,7 @@ Every wake is one pass through `setup()`, then deep sleep (~20uA measured):
   - `ff01` read: permit JSON (permit fields, `displayFlipped`, `next` = cached next permit, `now` = phone local epoch)
   - `ff02` write: sync type (1 auto, 2 button, 3 long press)
   - `ff03` write: status `shownPermit,cachedPermit,batteryMv,fwVersion`
-- The phone gets the permit from `https://fucktorontoparking.ca/api/permit.php` (no more GitHub `permit` branch)
+- The phone gets the permit from `https://fucktorontoparking.ca/api/permit` (no more GitHub `permit` branch)
 
 ## Branches
 - `dev` - Working branch (battery firmware)
