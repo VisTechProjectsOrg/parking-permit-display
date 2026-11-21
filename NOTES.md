@@ -244,6 +244,35 @@ on each sync** -> sets the ESP32 RTC. The display uses it to know "midnight" (fl
 - [x] Site allows future start date (verified) -> advance purchase is viable.
 - [x] Lead time = **2-3 days** (configurable).
 - [x] Low-battery = e-ink icon + app notif + site flag.
-- [ ] Pick advertise cadence (measure energy cost, last ~2 days, daytime only).
-- [ ] Define the BLE characteristics: push permit(s), push time, read-back permit#, read battery.
-- [ ] Buyer change: start date = current expiry + 1, configurable lead time.
+- [x] Cadence (as built, the display scans for the phone rather than advertising): check-ins at
+      8 AM and 7 PM; every 30 min 7 AM-9 PM once coverage ends within 24h; hourly with no clock.
+- [x] BLE protocol: see CLAUDE.md (pairing by owner ID, display ID, status with dev counters).
+- [ ] Buyer change: start date = current expiry + 1, configurable lead time. Checklist in the
+      buyer repo's NOTES.md ("Next session checklist"). Do this next.
+
+## Where things stand (2026-11-21)
+Built and live: pairing with one phone (owner ID, 10s reset, remote unpair), several displays per
+phone, first-run setup in the app, activity log, check-in stats from the display (missed
+check-ins, restarts), low-battery alerts by days left, skip-while-away on the site.
+
+Decided, keep as is:
+- **Check-in schedule stays.** Battery cost depends on the number of check-ins, not when they
+  happen, and sleep (~3.4 of ~6 mAh/week) dominates. Rough week: sleep ~3.4, routine check-ins
+  ~2.0, last-day check-ins ~0.5 => over a year on a 500 mAh cell. Moving the evening check-in
+  later (9-10 PM) is fine if the phone is near the car then; midnight is worse.
+- **Don't drop routine check-ins** to sleep until the buy day: they keep the clock corrected,
+  feed the "hasn't checked in" alert, and pick up mid-week changes. 1/day is the most to cut.
+- The expensive case is last-day check-ins with **no phone in range** (up to 28 tries, ~5 mAh).
+  Buying ahead fixes that better than any schedule change.
+
+VERIFY before changing the schedule (unmeasured):
+- [ ] Energy of one check-in (estimated ~0.17 mAh: ~6 s at ~100 mA).
+- [ ] RTC drift per day. Idea: at each sync, log (phone time - display time) to the activity log.
+      At 1% drift a week without a check-in moves the midnight switch by over an hour.
+- [ ] Real drain from the app's days-left estimate after a few weeks in the car.
+
+Ideas, not started:
+- **Permit per display:** each display tied to a car, so one stays in each car. Usually only one
+  permit is active, so the autobuyer keeps buying for the default vehicle; needs `/api/permit?plate=`
+  and a Car picker per display in the app. Two cars at once would mean per-car autobuy (bigger).
+- **Buy now** button for "need a permit today" after midnight: see the buyer repo's NOTES.md.
