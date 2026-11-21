@@ -26,7 +26,7 @@ static const int LORA_BUSY = 13;
 void ledOn()  { digitalWrite(PIN_LED, LOW); }
 void ledOff() { digitalWrite(PIN_LED, HIGH); }
 
-// Button-press feedback after the LED was on during the sync: a short gap, then `count` blinks
+// Button-press result after a dark sync: a short gap, then `count` blinks
 // of `onMs`, ending off. Two quick = synced, one long = couldn't sync.
 void ledSignal(int count, int onMs)
 {
