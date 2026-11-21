@@ -41,9 +41,11 @@ Every wake is one pass through `setup()`, then deep sleep (~20uA measured):
 - Clock comes from the phone on each sync (local time, stored as UTC); lost on power loss.
 - Check-ins: 8 AM and 7 PM; every 30 min (7 AM-9 PM) once coverage ends within 24h;
   hourly if the clock is unset; none below 3.3V (button + handoffs only). Low-battery icon below 3.5V.
-- Charging: the board can't see USB. A button press reading 30 mV+ above the last scheduled wake (or a
-  restart followed by a 20 mV climb) starts charging mode: bolt / full icon on the permit, a poll + sync
-  every 5 min, off when the voltage drops 30 mV off its peak (unplugged) or after 6 h. Proper USB sense
+- Charging: the board can't see USB. A press reading 30 mV+ above the last scheduled wake, or a climb
+  watch (after a restart, a press, or a scheduled wake that saw a jump: 2 rises in a row or +20 mV)
+  starts charging mode: full-screen battery + "Charging 80%" (env:charge_icon = small icon + % on the
+  permit instead), a poll + sync every 5 min, off when the voltage drops 30 mV off its peak or after 6 h.
+  Unreliable near full. Proper USB sense
   needs a wire (NOTES.md, "Show charging on the e-ink automatically").
 
 ## Key Files

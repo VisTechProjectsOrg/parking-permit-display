@@ -23,6 +23,21 @@ static const int LORA_MISO = 11;
 static const int LORA_NRST = 12;
 static const int LORA_BUSY = 13;
 
+// Rough single-cell LiPo state of charge; same curve as the app's PermitRepository.batteryPercent
+int batteryPercent(int mv)
+{
+    static const int curve[][2] = {{4150, 100}, {4000, 85}, {3900, 72}, {3800, 55}, {3750, 45},
+                                   {3700, 32}, {3650, 20}, {3550, 10}, {3450, 5}, {3300, 0}};
+    if (mv >= curve[0][0]) return 100;
+    for (int i = 1; i < (int)(sizeof(curve) / sizeof(curve[0])); i++) {
+        if (mv >= curve[i][0]) {
+            const int *hi = curve[i - 1], *lo = curve[i];
+            return lo[1] + (mv - lo[0]) * (hi[1] - lo[1]) / (hi[0] - lo[0]);
+        }
+    }
+    return 0;
+}
+
 void ledOn()  { digitalWrite(PIN_LED, LOW); }
 void ledOff() { digitalWrite(PIN_LED, HIGH); }
 
