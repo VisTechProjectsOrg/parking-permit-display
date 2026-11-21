@@ -262,7 +262,9 @@ uint32_t runWake(esp_sleep_wakeup_cause_t cause)
         savePermits(store);
         Serial.println("Permits updated");
       }
+      if (syncType != SYNC_TYPE_AUTO) ledSignal(2, 150);  // button press: two quick blinks = synced
     } else if (syncType != SYNC_TYPE_AUTO) {
+      ledSignal(1, 1000);  // one long blink = couldn't sync
       // Someone is looking at it: say why nothing changed, then put the permit back
       displayInit(store.displayFlipped);
       displayMessage(result == SYNC_NOT_FOUND ? "Phone not found" : "Sync failed");

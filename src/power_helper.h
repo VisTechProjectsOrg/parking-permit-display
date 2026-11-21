@@ -26,6 +26,20 @@ static const int LORA_BUSY = 13;
 void ledOn()  { digitalWrite(PIN_LED, LOW); }
 void ledOff() { digitalWrite(PIN_LED, HIGH); }
 
+// Button-press feedback after the LED was on during the sync: a short gap, then `count` blinks
+// of `onMs`, ending off. Two quick = synced, one long = couldn't sync.
+void ledSignal(int count, int onMs)
+{
+    ledOff();
+    delay(250);
+    for (int i = 0; i < count; i++) {
+        ledOn();
+        delay(onMs);
+        ledOff();
+        delay(150);
+    }
+}
+
 // Battery voltage in mV. Returns ~4200+ or a bogus value on USB with no cell attached.
 int readBatteryMv()
 {
