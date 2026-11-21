@@ -289,7 +289,13 @@ Ideas, not started:
     GPIO17 input limits and ext1 wake modes (not read yet); cold review of the plan.
   Until then (firmware 6): a button press after plugging in, or a restart while plugged in that sees
   the voltage climb, starts charging mode (bolt on the e-ink and in the app, polls every 5 min,
-  clears on unplug or after 6 h).
+  clears on unplug or after 6 h). **Not reliable** (seen 2026-11-21): it misses when Lexi restarted
+  while plugged in (no on-battery reading to compare), near full (small jump), and when no button is
+  pressed. Known bug: a scheduled wake while plugged in overwrites `baselineMv` with the charging
+  voltage, so a later press sees no jump; that wake should start charging mode itself instead. But
+  voltage guessing keeps growing edge cases (e.g. charged and unplugged before the next wake looks
+  like a plug-in), so the GPIO17 wire is the real fix. Meanwhile the orange charger LED is the
+  reliable sign.
 - **Permit per display:** each display tied to a car, so one stays in each car. Usually only one
   permit is active, so the autobuyer keeps buying for the default vehicle; needs `/api/permit?plate=`
   and a Car picker per display in the app. Two cars at once would mean per-car autobuy (bigger).
