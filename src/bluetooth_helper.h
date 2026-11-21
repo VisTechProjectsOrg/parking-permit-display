@@ -3,6 +3,7 @@
 
 // The display is a BLE client: the phone (ParkingPermitSync) runs a GATT server and
 // advertises all the time, so a short scan on each wake finds it when it's in range.
+// A paired display only connects to the phone advertising its owner ID (see permit_store.h).
 
 #include <BLEDevice.h>
 #include <BLEUtils.h>
@@ -21,23 +22,49 @@
 #define SYNC_TYPE_MANUAL 2  // button press
 #define SYNC_TYPE_FORCE  3  // long press
 
-#define FW_VERSION 2
+#define FW_VERSION 3
 
-enum SyncResult { SYNC_NOT_FOUND, SYNC_FAILED, SYNC_OK };
+// SYNC_UNPAIRED: the phone forgot this display, pairing and permits are cleared
+enum SyncResult { SYNC_NOT_FOUND, SYNC_FAILED, SYNC_OK, SYNC_UNPAIRED };
 
 static BLEAdvertisedDevice *targetDevice = nullptr;
+static bool scanPaired = false;                 // only accept the phone below
+static uint8_t scanOwner[OWNER_ID_LEN];
+static bool foundHasOwner = false;              // the phone we found advertises an owner ID
+static uint8_t foundOwner[OWNER_ID_LEN];
+
+// Owner ID from the 0xFF00 service data, false if the phone doesn't send one (older app)
+static bool readOwnerId(BLEAdvertisedDevice &d, uint8_t out[OWNER_ID_LEN])
+{
+    for (int i = 0; i < d.getServiceDataCount(); i++) {
+        if (!d.getServiceDataUUID(i).equals(BLEUUID(BLE_SERVICE_UUID))) continue;
+        std::string data = d.getServiceData(i);
+        if (data.length() != OWNER_ID_LEN) return false;
+        memcpy(out, data.data(), OWNER_ID_LEN);
+        return true;
+    }
+    return false;
+}
 
 class PermitScanCallback : public BLEAdvertisedDeviceCallbacks
 {
     void onResult(BLEAdvertisedDevice advertisedDevice)
     {
-        if (advertisedDevice.haveServiceUUID() &&
-            advertisedDevice.isAdvertisingService(BLEUUID(BLE_SERVICE_UUID)))
-        {
-            Serial.println("Found phone");
-            targetDevice = new BLEAdvertisedDevice(advertisedDevice);
-            BLEDevice::getScan()->stop();
+        if (targetDevice || !advertisedDevice.haveServiceUUID() ||
+            !advertisedDevice.isAdvertisingService(BLEUUID(BLE_SERVICE_UUID)))
+            return;
+
+        uint8_t owner[OWNER_ID_LEN];
+        bool hasOwner = readOwnerId(advertisedDevice, owner);
+        if (scanPaired && !(hasOwner && memcmp(owner, scanOwner, OWNER_ID_LEN) == 0)) {
+            Serial.println("Ignoring a phone that isn't ours");
+            return;
         }
+        Serial.println(hasOwner ? "Found phone" : "Found phone (no owner ID)");
+        foundHasOwner = hasOwner;
+        if (hasOwner) memcpy(foundOwner, owner, OWNER_ID_LEN);
+        targetDevice = new BLEAdvertisedDevice(advertisedDevice);
+        BLEDevice::getScan()->stop();
     }
 };
 
@@ -75,9 +102,14 @@ static void bleShutdown(BLEClient *client)
 
 // Scan for the phone, read the permits and the time, write back our status.
 // On SYNC_OK, store holds the phone's data (time is set too if the phone sent it).
-SyncResult syncWithPhone(uint32_t scanSeconds, uint8_t syncType, PermitStore &store, int batteryMv)
+// Unpaired, it takes any phone, and pairs with it if allowClaim (someone pressed the button
+// or just powered it on, so the phone next to it is the owner's).
+SyncResult syncWithPhone(uint32_t scanSeconds, uint8_t syncType, PermitStore &store, int batteryMv,
+                         bool allowClaim)
 {
-    Serial.printf("BLE: scanning %u s\n", scanSeconds);
+    scanPaired = loadOwner(scanOwner);
+    foundHasOwner = false;
+    Serial.printf("BLE: scanning %u s (%s)\n", scanSeconds, scanPaired ? "paired" : "unpaired");
     BLEDevice::init("ParkingDisplay");
     BLEDevice::setMTU(256);  // whole permit JSON in few packets, status write in one
 
@@ -114,15 +146,34 @@ SyncResult syncWithPhone(uint32_t scanSeconds, uint8_t syncType, PermitStore &st
         return SYNC_FAILED;
     }
 
+    // Sync type, then our ID, so the phone knows which display is asking before the read
     BLERemoteCharacteristic *syncTypeChar = service->getCharacteristic(BLEUUID(BLE_SYNC_TYPE_CHAR_UUID));
-    if (syncTypeChar) syncTypeChar->writeValue(&syncType, 1, false);
+    if (syncTypeChar) {
+        uint8_t hello[13];
+        hello[0] = syncType;
+        char id[13];
+        getDisplayId(id);
+        memcpy(hello + 1, id, 12);
+        syncTypeChar->writeValue(hello, sizeof(hello), true);
+    }
 
     String json = permitChar->readValue().c_str();
     Serial.println(json);
 
     JsonDocument doc;
     PermitStore incoming = {};
-    if (deserializeJson(doc, json) || !parsePermit(doc.as<JsonVariantConst>(), incoming.slot[0])) {
+    bool parsed = !deserializeJson(doc, json);
+    // Pairing changes are written to flash only after BLE is shut down: NVS writes while
+    // connected crashed the BLE stack on teardown
+    if (parsed && (doc["unpair"] | false)) {
+        Serial.println("Phone forgot this display: unpairing");
+        bleShutdown(client);
+        clearOwner();
+        clearPermits();
+        memset(&store, 0, sizeof(store));
+        return SYNC_UNPAIRED;
+    }
+    if (!parsed || !parsePermit(doc.as<JsonVariantConst>(), incoming.slot[0])) {
         Serial.println("Bad or incomplete permit JSON");
         bleShutdown(client);
         return SYNC_FAILED;
@@ -146,6 +197,10 @@ SyncResult syncWithPhone(uint32_t scanSeconds, uint8_t syncType, PermitStore &st
     }
 
     bleShutdown(client);
+    if (!scanPaired && allowClaim && foundHasOwner) {
+        saveOwner(foundOwner);
+        Serial.println("Paired with this phone");
+    }
     return SYNC_OK;
 }
 

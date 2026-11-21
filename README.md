@@ -35,6 +35,7 @@ flowchart LR
 |--------|--------|
 | **Short press** | Sync with the phone now |
 | **Long press (3s)** | Sync and redraw even if nothing changed |
+| **Hold 10s** | Reset: forget the phone and the permits (LED goes out at 3s, back on at 10s) |
 | **Low battery** | Battery icon on the display, notification in the app |
 
 ## Setup
@@ -53,13 +54,13 @@ Install [parking-permit-android](https://github.com/VisTechProjectsOrg/parking-p
 
 ### 3. Sync
 
-Press the display's button with the phone nearby. After that it checks in on its own.
+Press the display's button with the phone nearby. It pairs with that phone and only syncs with it from then on, and after that it checks in on its own. One phone can have several displays: each shows up in the app's Display Settings, where it can be renamed, flipped or forgotten. A forgotten display unpairs at its next check-in.
 
 ## BLE Protocol
 
-The phone runs the GATT server (service `0000ff00-...`); the display connects as a client:
-- `ff01` read: permit JSON with the cached next permit and the phone's local time
-- `ff02` write: sync type (auto, button, long press)
+The phone runs the GATT server (service `0000ff00-...`) and advertises an 8-byte owner ID as service data on `ff00`; a paired display only connects to the phone with its owner ID. The display connects as a client:
+- `ff02` write: sync type (auto, button, long press) followed by the display's 12-char ID
+- `ff01` read: permit JSON with the cached next permit and the phone's local time, or `{"unpair":true}` for a display forgotten in the app
 - `ff03` write: status `shownPermit,cachedPermit,batteryMv,fwVersion`
 
 ## Files
