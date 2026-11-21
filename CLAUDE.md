@@ -26,7 +26,7 @@ pio device monitor
 
 ## Hardware
 - **Board**: Heltec Vision Master E290 (ESP32-S3 + 2.9" e-ink)
-- **Button**: GPIO 21 (short press = BLE sync, hold 3s = force redraw); wakes from deep sleep
+- **Button**: GPIO 21 (short press = BLE sync, hold 3s = force redraw, hold 10s = reset pairing + permits); wakes from deep sleep
 - **LED**: GPIO 45 (active LOW)
 - **Battery**: sense on GPIO 7, divider switched on by GPIO 46 (HIGH), multiplier 4.9 x 1.03
 - **Charger**: LGS4056H, fixed ~500mA: use a protected cell of 500mAh or more
@@ -51,10 +51,14 @@ Every wake is one pass through `setup()`, then deep sleep (~20uA measured):
 
 ## BLE Protocol
 - Display is the BLE client; the phone (ParkingPermitSync) is the GATT server and advertises constantly
+- Pairing: the phone advertises an 8-byte owner ID as service data on `ff00`. An unpaired display takes any
+  phone and pairs on a button or power-on sync (never on a timer check-in); a paired one only connects to
+  its owner. Display ID = eFuse MAC as 12 hex chars; the app names it "Display XXXX" (last 4).
 - Service `0000ff00-...`:
-  - `ff01` read: permit JSON (permit fields, `displayFlipped`, `next` = cached next permit, `now` = phone local epoch)
-  - `ff02` write: sync type (1 auto, 2 button, 3 long press)
-  - `ff03` write: status `shownPermit,cachedPermit,batteryMv,fwVersion`
+  - `ff02` write (with response, before the read): sync type (1 auto, 2 button, 3 long press) + 12-char display ID
+  - `ff01` read: permit JSON (permit fields, `displayFlipped`, `next` = cached next permit, `now` = phone local epoch),
+    or `{"unpair":true}` when the display was forgotten in the app (it clears pairing and permits)
+  - `ff03` write: status `shownPermit,cachedPermit,batteryMv,fwVersion,missNotFound,missFailed,lastRestartReason,restarts` (misses since the last good check-in; restart reason = `esp_reset_reason()`; falls back to the first four fields if the MTU is still 23)
 - The phone gets the permit from `https://fucktorontoparking.ca/api/permit` (no more GitHub `permit` branch)
 
 ## Branches

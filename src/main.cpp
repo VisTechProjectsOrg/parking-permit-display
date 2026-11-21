@@ -31,6 +31,7 @@ static const time_t NO_CLOCK_INTERVAL = 60 * 60;    // clock lost (battery died)
 static const uint32_t SCAN_SECONDS_TIMER = 4;       // phone advertises every ~100ms, 4s is plenty
 static const uint32_t SCAN_SECONDS_BUTTON = 10;
 static const uint32_t LONG_PRESS_MS = 3000;
+static const uint32_t RESET_PRESS_MS = 10000;      // forget the phone and the permits
 
 // What's on the e-ink right now. RTC memory survives deep sleep but not a power loss, in
 // which case we redraw once.
@@ -129,6 +130,31 @@ void displayMessage(const char *message)
   display->update();
 }
 
+// Not paired with a phone: how to pair, and this unit's name as the app will show it
+void displayUnpaired()
+{
+  char id[13];
+  getDisplayId(id);
+  char name[24];
+  snprintf(name, sizeof(name), "Display %s", id + 8);
+  for (char *c = name; *c; c++) *c = toupper(*c);
+
+  display->clearMemory();
+  display->setFont(&FreeSansBold8pt7b);
+  display->setTextSize(1);
+  const char *lines[] = {"Not paired", "Press the button near your phone", name};
+  const int ys[] = {40, 72, 110};
+  for (int i = 0; i < 3; i++) {
+    int16_t x1, y1;
+    uint16_t w, h;
+    display->getTextBounds((char *)lines[i], 0, 0, &x1, &y1, &w, &h);
+    display->setCursor((SCREEN_W - w) / 2, ys[i]);
+    display->print(lines[i]);
+  }
+  display->update();
+  strlcpy(shownPermit, "-", sizeof(shownPermit));
+}
+
 // Seconds-of-day helpers on local time (stored as UTC, see permit_store.h)
 static time_t atHourOnDay(time_t t, int hour)
 {
@@ -181,16 +207,32 @@ uint32_t runWake(esp_sleep_wakeup_cause_t cause)
   uint32_t scanSeconds = SCAN_SECONDS_TIMER;
 
   if (cause == ESP_SLEEP_WAKEUP_EXT0) {
-    // Button: short press = sync, hold 3s = force (redraw even if nothing changed)
+    // Button: short press = sync, hold 3s = force (redraw even if nothing changed),
+    // hold 10s = reset. The LED goes out at 3s and back on at 10s so you know where you are.
     unsigned long start = millis();
-    while (digitalRead(PIN_BUTTON) == LOW && millis() - start < LONG_PRESS_MS) delay(10);
-    bool longPress = millis() - start >= LONG_PRESS_MS;
+    ledOn();
+    while (digitalRead(PIN_BUTTON) == LOW && millis() - start < RESET_PRESS_MS) {
+      unsigned long held = millis() - start;
+      if (held >= LONG_PRESS_MS) ledOff();
+      delay(10);
+    }
+    unsigned long held = millis() - start;
+    ledOn();
+    if (held >= RESET_PRESS_MS) {
+      Serial.println("10s hold: reset pairing and permits");
+      clearOwner();
+      clearPermits();
+      displayInit(false);
+      displayUnpaired();
+      while (digitalRead(PIN_BUTTON) == LOW) delay(20);  // released = no extra press
+      return 0;
+    }
+    bool longPress = held >= LONG_PRESS_MS;
     Serial.println(longPress ? "Long press: force sync" : "Button: sync");
     doSync = true;
     forceRedraw = longPress;
     syncType = longPress ? SYNC_TYPE_FORCE : SYNC_TYPE_MANUAL;
     scanSeconds = SCAN_SECONDS_BUTTON;
-    ledOn();
   } else if (cause == ESP_SLEEP_WAKEUP_TIMER) {
     // Timer: a check-in, or just the handoff to the cached permit
     doSync = nextCheckinAt != 0 && time(nullptr) >= nextCheckinAt - 120;
@@ -203,8 +245,18 @@ uint32_t runWake(esp_sleep_wakeup_cause_t cause)
 
   if (doSync) {
     PermitStore fresh = store;
-    SyncResult result = syncWithPhone(scanSeconds, syncType, fresh, batteryMv);
-    if (result == SYNC_OK) {
+    // Timer check-ins never pair: nobody is standing next to it
+    bool allowClaim = cause != ESP_SLEEP_WAKEUP_TIMER;
+    SyncResult result = syncWithPhone(scanSeconds, syncType, fresh, batteryMv, allowClaim);
+    // The phone got the miss counts with this sync's status, so start over
+    if (result == SYNC_OK) missNotFound = missFailed = 0;
+    else if (result == SYNC_NOT_FOUND) missNotFound++;
+    else if (result == SYNC_FAILED) missFailed++;
+    if (result == SYNC_UNPAIRED) {
+      displayInit(false);
+      displayUnpaired();
+      return 0;
+    } else if (result == SYNC_OK) {
       if (memcmp(&fresh, &store, sizeof(store)) != 0) {
         store = fresh;
         savePermits(store);
@@ -234,7 +286,9 @@ uint32_t runWake(esp_sleep_wakeup_cause_t cause)
     }
   } else if (strcmp(shownPermit, "-") != 0) {
     displayInit(store.displayFlipped);
-    displayMessage("No permit yet. Press the button to sync.");
+    uint8_t owner[OWNER_ID_LEN];
+    if (loadOwner(owner)) displayMessage("No permit yet. Press the button to sync.");
+    else displayUnpaired();
     strlcpy(shownPermit, "-", sizeof(shownPermit));
   }
 
@@ -260,7 +314,10 @@ void setup()
 
   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
   bool fromSleep = cause == ESP_SLEEP_WAKEUP_EXT0 || cause == ESP_SLEEP_WAKEUP_TIMER;
-  if (!fromSleep) delay(1500);  // power-on/flash: give the USB serial monitor a moment
+  if (!fromSleep) {
+    recordRestart((int)esp_reset_reason());  // power-on, crash, brownout...: counted for the phone
+    delay(1500);  // power-on/flash: give the USB serial monitor a moment
+  }
 
   uint32_t seconds = runWake(cause);
 

@@ -92,6 +92,68 @@ bool loadPermits(PermitStore &store)
   return hasPermit(store.slot[0]) || hasPermit(store.slot[1]);
 }
 
+void clearPermits()
+{
+  prefs.begin("permit", false);
+  prefs.clear();
+  prefs.end();
+}
+
+// ----- Pairing: the phone this display belongs to -----
+// The phone advertises a random 8-byte owner ID (service data on 0xFF00). Once paired, the
+// display only syncs with a phone advertising that ID. Android rotates its BLE address, so
+// the address can't be used for this.
+static const int OWNER_ID_LEN = 8;
+
+bool loadOwner(uint8_t owner[OWNER_ID_LEN])
+{
+  prefs.begin("pair", true);
+  bool ok = prefs.getBytesLength("owner") == OWNER_ID_LEN &&
+            prefs.getBytes("owner", owner, OWNER_ID_LEN) == OWNER_ID_LEN;
+  prefs.end();
+  return ok;
+}
+
+void saveOwner(const uint8_t owner[OWNER_ID_LEN])
+{
+  prefs.begin("pair", false);
+  prefs.putBytes("owner", owner, OWNER_ID_LEN);
+  prefs.end();
+}
+
+void clearOwner()
+{
+  prefs.begin("pair", false);
+  prefs.clear();
+  prefs.end();
+}
+
+// ----- Restart stats, reported to the phone -----
+// Written only on a real restart (power-on, crash, brownout), never on a deep-sleep wake,
+// so flash wear doesn't matter.
+void recordRestart(int reason)
+{
+  prefs.begin("stats", false);
+  prefs.putUInt("boots", prefs.getUInt("boots", 0) + 1);
+  prefs.putInt("reason", reason);
+  prefs.end();
+}
+
+void loadRestartStats(uint32_t &boots, int &reason)
+{
+  prefs.begin("stats", true);
+  boots = prefs.getUInt("boots", 0);
+  reason = prefs.getInt("reason", -1);
+  prefs.end();
+}
+
+// This unit's ID: the factory MAC as 12 hex chars. The app names new units by the last 4.
+void getDisplayId(char out[13])
+{
+  uint64_t mac = ESP.getEfuseMac();
+  snprintf(out, 13, "%012llx", (unsigned long long)mac);
+}
+
 // Which slot to show now: the one valid right now (the newer if they overlap), else the next
 // one to start, else the most recent expired one. Without a clock, slot 0. -1 if empty.
 int chooseSlot(const PermitStore &store)
