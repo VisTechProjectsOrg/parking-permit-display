@@ -92,11 +92,15 @@ static bool parsePermit(JsonVariantConst o, PermitData &p)
            p.barcodeValue[0] && p.barcodeLabel[0];
 }
 
+// The client is never deleted: disconnect() is asynchronous and the BLE library later delivers
+// ESP_GATTC_DISCONNECT_EVT to it (BLEClient.cpp gives its semaphores there). Deleting it first
+// made that a use-after-free, an occasional assert in xQueueGenericSend (seen after syncs and
+// unpairs). Deep sleep reboots the chip, so nothing piles up.
 static void bleShutdown(BLEClient *client)
 {
-    if (client) {
-        if (client->isConnected()) client->disconnect();
-        delete client;
+    if (client && client->isConnected()) {
+        client->disconnect();
+        for (int i = 0; i < 100 && client->isConnected(); i++) delay(10);  // let the event land
     }
     if (targetDevice) {
         delete targetDevice;
