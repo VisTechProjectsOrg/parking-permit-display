@@ -128,6 +128,25 @@ void clearOwner()
   prefs.end();
 }
 
+// ----- Restart stats, reported to the phone -----
+// Written only on a real restart (power-on, crash, brownout), never on a deep-sleep wake,
+// so flash wear doesn't matter.
+void recordRestart(int reason)
+{
+  prefs.begin("stats", false);
+  prefs.putUInt("boots", prefs.getUInt("boots", 0) + 1);
+  prefs.putInt("reason", reason);
+  prefs.end();
+}
+
+void loadRestartStats(uint32_t &boots, int &reason)
+{
+  prefs.begin("stats", true);
+  boots = prefs.getUInt("boots", 0);
+  reason = prefs.getInt("reason", -1);
+  prefs.end();
+}
+
 // This unit's ID: the factory MAC as 12 hex chars. The app names new units by the last 4.
 void getDisplayId(char out[13])
 {

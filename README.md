@@ -61,7 +61,7 @@ Press the display's button with the phone nearby. It pairs with that phone and o
 The phone runs the GATT server (service `0000ff00-...`) and advertises an 8-byte owner ID as service data on `ff00`; a paired display only connects to the phone with its owner ID. The display connects as a client:
 - `ff02` write: sync type (auto, button, long press) followed by the display's 12-char ID
 - `ff01` read: permit JSON with the cached next permit and the phone's local time, or `{"unpair":true}` for a display forgotten in the app
-- `ff03` write: status `shownPermit,cachedPermit,batteryMv,fwVersion`
+- `ff03` write: status `shownPermit,cachedPermit,batteryMv,fwVersion,missNotFound,missFailed,lastRestartReason,restarts` (misses since the last good check-in; restart reason = `esp_reset_reason()`; falls back to the first four fields if the MTU is still 23)
 
 ## Files
 

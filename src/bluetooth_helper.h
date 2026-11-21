@@ -22,7 +22,12 @@
 #define SYNC_TYPE_MANUAL 2  // button press
 #define SYNC_TYPE_FORCE  3  // long press
 
-#define FW_VERSION 3
+#define FW_VERSION 4
+
+// Check-ins that failed since the last good one, sent with the next good one. RTC memory:
+// survives deep sleep, lost on a restart (which the restart count shows instead).
+RTC_DATA_ATTR uint16_t missNotFound = 0;
+RTC_DATA_ATTR uint16_t missFailed = 0;
 
 // SYNC_UNPAIRED: the phone forgot this display, pairing and permits are cleared
 enum SyncResult { SYNC_NOT_FOUND, SYNC_FAILED, SYNC_OK, SYNC_UNPAIRED };
@@ -138,6 +143,11 @@ SyncResult syncWithPhone(uint32_t scanSeconds, uint8_t syncType, PermitStore &st
         return SYNC_FAILED;
     }
 
+    // Ask for bigger packets now: the library's own request on connect is skipped (it checks a
+    // connection ID that isn't set yet), which left the link at 20 bytes per write. The permit
+    // read below gives the exchange time to settle before the status write.
+    client->setMTU(256);
+
     BLERemoteService *service = client->getService(BLEUUID(BLE_SERVICE_UUID));
     BLERemoteCharacteristic *permitChar = service ? service->getCharacteristic(BLEUUID(BLE_PERMIT_CHAR_UUID)) : nullptr;
     if (!permitChar) {
@@ -183,16 +193,31 @@ SyncResult syncWithPhone(uint32_t scanSeconds, uint8_t syncType, PermitStore &st
     if (doc["now"].is<long long>()) setLocalTime((time_t)doc["now"].as<long long>());
     store = incoming;
 
-    // Tell the phone what we'll show and what we're holding, plus the battery level
+    // Tell the phone what we'll show and what we're holding, the battery level, and dev info:
+    // "shown,cached,mv,fw,missNotFound,missFailed,lastRestartReason,restarts"
     BLERemoteCharacteristic *statusChar = service->getCharacteristic(BLEUUID(BLE_STATUS_CHAR_UUID));
     if (statusChar) {
         int shown = chooseSlot(store);
         int cached = shown == 0 ? 1 : 0;
-        char status[64];
-        snprintf(status, sizeof(status), "%s,%s,%d,%d",
+        uint32_t boots;
+        int reason;
+        loadRestartStats(boots, reason);
+        char status[96];
+        snprintf(status, sizeof(status), "%s,%s,%d,%d,%u,%u,%d,%u",
                  shown >= 0 ? store.slot[shown].permitNumber : "",
                  shown >= 0 ? store.slot[cached].permitNumber : "",
-                 batteryMv, FW_VERSION);
+                 batteryMv, FW_VERSION, missNotFound, missFailed, reason, (unsigned)boots);
+        // A write longer than the link's packet size gets cut off. The bigger MTU is requested
+        // on connect but settles asynchronously, so give it a moment; if it's still the 23-byte
+        // default, send just the first four fields (they fit) rather than a chopped string.
+        for (int i = 0; i < 100 && client->getMTU() <= 23; i++) delay(10);
+        if ((int)strlen(status) > client->getMTU() - 3) {
+            Serial.printf("MTU %u: sending the short status\n", client->getMTU());
+            snprintf(status, sizeof(status), "%s,%s,%d,%d",
+                     shown >= 0 ? store.slot[shown].permitNumber : "",
+                     shown >= 0 ? store.slot[cached].permitNumber : "",
+                     batteryMv, FW_VERSION);
+        }
         statusChar->writeValue((uint8_t *)status, strlen(status), true);
     }
 

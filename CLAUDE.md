@@ -58,7 +58,7 @@ Every wake is one pass through `setup()`, then deep sleep (~20uA measured):
   - `ff02` write (with response, before the read): sync type (1 auto, 2 button, 3 long press) + 12-char display ID
   - `ff01` read: permit JSON (permit fields, `displayFlipped`, `next` = cached next permit, `now` = phone local epoch),
     or `{"unpair":true}` when the display was forgotten in the app (it clears pairing and permits)
-  - `ff03` write: status `shownPermit,cachedPermit,batteryMv,fwVersion`
+  - `ff03` write: status `shownPermit,cachedPermit,batteryMv,fwVersion,missNotFound,missFailed,lastRestartReason,restarts` (misses since the last good check-in; restart reason = `esp_reset_reason()`; falls back to the first four fields if the MTU is still 23)
 - The phone gets the permit from `https://fucktorontoparking.ca/api/permit` (no more GitHub `permit` branch)
 
 ## Branches

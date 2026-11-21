@@ -248,6 +248,10 @@ uint32_t runWake(esp_sleep_wakeup_cause_t cause)
     // Timer check-ins never pair: nobody is standing next to it
     bool allowClaim = cause != ESP_SLEEP_WAKEUP_TIMER;
     SyncResult result = syncWithPhone(scanSeconds, syncType, fresh, batteryMv, allowClaim);
+    // The phone got the miss counts with this sync's status, so start over
+    if (result == SYNC_OK) missNotFound = missFailed = 0;
+    else if (result == SYNC_NOT_FOUND) missNotFound++;
+    else if (result == SYNC_FAILED) missFailed++;
     if (result == SYNC_UNPAIRED) {
       displayInit(false);
       displayUnpaired();
@@ -310,7 +314,10 @@ void setup()
 
   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
   bool fromSleep = cause == ESP_SLEEP_WAKEUP_EXT0 || cause == ESP_SLEEP_WAKEUP_TIMER;
-  if (!fromSleep) delay(1500);  // power-on/flash: give the USB serial monitor a moment
+  if (!fromSleep) {
+    recordRestart((int)esp_reset_reason());  // power-on, crash, brownout...: counted for the phone
+    delay(1500);  // power-on/flash: give the USB serial monitor a moment
+  }
 
   uint32_t seconds = runWake(cause);
 
